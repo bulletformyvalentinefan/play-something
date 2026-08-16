@@ -9,7 +9,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -25,7 +27,7 @@ public class TrackService {
         }
         return response.data().stream()
                 .map(TrackResponse::fromDeezer)
-                .toList();
+                .collect(Collectors.toCollection(ArrayList::new));
     }
 
     @Cacheable(value = "tracks", key = "#trackId")
