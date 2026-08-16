@@ -1,5 +1,6 @@
 package com.spotify.group.domain.user;
 
+import com.spotify.group.infrastructure.exception.ResourceNotFoundException;
 import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -27,13 +28,13 @@ public class UserService {
 
     @Transactional(readOnly = true)
     public UserResponse login(LoginRequest request) {
-        User user = userRepository.findByEmail(request.email()).orElseThrow(()-> new IllegalArgumentException("Usuario no encontrado"));
+        User user = userRepository.findByEmail(request.email()).orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
         return UserResponse.fromEntity(user);
     }
 
     @Transactional(readOnly = true)
     public UserResponse findById(UUID id) {
-        User user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("Usuario no encotrado"));
+        User user = userRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
         return UserResponse.fromEntity(user);
     }
 }
