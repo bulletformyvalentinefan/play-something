@@ -1,7 +1,11 @@
-package com.spotify.group.domain.track.dto;
+package com.spotify.group.domain.track;
 
+import com.spotify.group.domain.track.dto.DeezerSearchResponse;
+import com.spotify.group.domain.track.dto.DeezerTrackResponse;
+import com.spotify.group.domain.track.dto.TrackResponse;
 import com.spotify.group.infrastructure.client.DeezerClient;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -12,14 +16,18 @@ public class TrackService {
 
     private final DeezerClient deezerClient;
 
+    @Cacheable(value = "track_searches", key = "#query")
     public List<TrackResponse> searchTracks(String query) {
         DeezerSearchResponse response = deezerClient.searchTracks(query);
         if (response == null || response.data() == null) {
             return List.of();
         }
-        return response.data().stream().map(TrackResponse::fromDeezer).toList();
-
+        return response.data().stream()
+                .map(TrackResponse::fromDeezer)
+                .toList();
     }
+
+    @Cacheable(value = "tracks", key = "#trackId")
     public TrackResponse getTrackById(Long trackId) {
         DeezerTrackResponse response = deezerClient.getTrackById(trackId);
         if (response == null || response.id() == null) {
