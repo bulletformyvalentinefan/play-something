@@ -4,6 +4,7 @@ import com.spotify.group.domain.track.dto.DeezerSearchResponse;
 import com.spotify.group.domain.track.dto.DeezerTrackResponse;
 import com.spotify.group.domain.track.dto.TrackResponse;
 import com.spotify.group.infrastructure.client.DeezerClient;
+import com.spotify.group.infrastructure.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -31,7 +32,7 @@ public class TrackService {
     public TrackResponse getTrackById(Long trackId) {
         DeezerTrackResponse response = deezerClient.getTrackById(trackId);
         if (response == null || response.id() == null) {
-            throw new IllegalArgumentException("Canción no encontrada en Deezer con ID: " + trackId);
+            throw new ResourceNotFoundException("Canción no encontrada en Deezer con ID: " + trackId);
         }
         return TrackResponse.fromDeezer(response);
     }
