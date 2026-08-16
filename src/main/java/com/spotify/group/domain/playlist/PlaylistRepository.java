@@ -7,6 +7,4 @@ import java.util.UUID;
 public interface PlaylistRepository extends JpaRepository<Playlist, UUID> {
 
     List<Playlist> findByUserId(UUID userId);
-
-    UUID id(UUID id);
 }
