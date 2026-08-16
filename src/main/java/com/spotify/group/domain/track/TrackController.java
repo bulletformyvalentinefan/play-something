@@ -4,13 +4,12 @@ import com.spotify.group.domain.track.dto.TrackResponse;
 import com.spotify.group.infrastructure.kafka.TrackEventProducer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
 
-@Controller
+@RestController
 @RequestMapping("/api/v1/spotify/tracks")
 @RequiredArgsConstructor
 public class TrackController {
