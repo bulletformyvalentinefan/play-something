@@ -10,7 +10,7 @@ services:
     environment:
       - ORACLE_PASSWORD=oracle_root_pwd
       - APP_USER=spotify_user
-      - APP_PASSWORD=spotify_pwd
+      - APP_USER_PASSWORD=spotify_pwd
     volumes:
       - oracle_data:/opt/oracle/oradata
     healthcheck:
