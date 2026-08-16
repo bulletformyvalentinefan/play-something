@@ -1,0 +1,47 @@
+server:
+port: 8080
+
+spring:
+application:
+name: spotify-backend
+
+# Conexión a Oracle DB
+datasource:
+url: jdbc:oracle:thin:@localhost:1521/FREEPDB1
+username: spotify_user
+password: spotify_pwd
+driver-class-name: oracle.jdbc.OracleDriver
+hikari:
+maximum-pool-size: 10
+minimum-idle: 5
+
+# Configuración Hibernate / JPA
+jpa:
+hibernate:
+ddl-auto: update
+show-sql: false
+properties:
+hibernate:
+format_sql: true
+dialect: org.hibernate.dialect.OracleDialect
+
+# Conexión a Redis
+data:
+redis:
+host: localhost
+port: 6379
+timeout: 2000ms
+
+# Conexión a Kafka
+kafka:
+bootstrap-servers: localhost:9092
+producer:
+key-serializer: org.apache.kafka.common.serialization.StringSerializer
+value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+consumer:
+group-id: spotify-group
+auto-offset-reset: earliest
+key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+properties:
+spring.json.trusted.packages: "*"
