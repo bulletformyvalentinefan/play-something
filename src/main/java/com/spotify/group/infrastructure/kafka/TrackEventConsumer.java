@@ -11,7 +11,6 @@ public class TrackEventConsumer {
 
     @KafkaListener(topics = "track-played-topic", groupId = "spotify-group")
     public void consumeTrackPlayed(TrackPlayedEvent event) {
-        log.info("Evento recibido desde Kafka -> Procesando analítica para track: {} por usuario: {} en {}",
-                event.trackId(), event.userId(), event.playedAt());
+        log.info("Evento recibido desde Kafka -> Procesando analítica para track: {} por usuario: {} en {}", event.trackId(), event.userId(), event.playedAt());
     }
 }
