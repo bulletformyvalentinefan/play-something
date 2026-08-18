@@ -30,9 +30,10 @@ public class TrackController {
     }
 
     @PostMapping("/{trackId}/play")
-    public ResponseEntity<Void> playTrack(@PathVariable Long trackId, @RequestParam UUID userId) {
+    public ResponseEntity<TrackResponse> playTrack(@PathVariable Long trackId, @RequestParam UUID userId) {
+        TrackResponse track = service.getTrackById(trackId);
         trackEventProducer.emitTrackPlayed(userId, trackId);
-        return ResponseEntity.accepted().build();
+        return ResponseEntity.ok(track);
     }
 
 }

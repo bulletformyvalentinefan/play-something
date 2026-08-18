@@ -6,6 +6,7 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
@@ -17,6 +18,7 @@ import org.springframework.kafka.support.serializer.JsonSerializer;
 
 import java.util.Map;
 
+@EnableKafka
 @Configuration
 public class KafkaConfig {
 
@@ -24,8 +26,12 @@ public class KafkaConfig {
 
     @Bean
     public ProducerFactory<String, Object> producerFactory(KafkaProperties properties, ObjectMapper objectMapper) {
-        Map<String, Object> producerProps = properties.buildProducerProperties();
-        return new DefaultKafkaProducerFactory<>(producerProps, new StringSerializer(), new JsonSerializer<>(objectMapper));
+        Map<String, Object> producerProps = properties.buildProducerProperties(null);
+        return new DefaultKafkaProducerFactory<>(
+                producerProps,
+                new StringSerializer(),
+                new JsonSerializer<>(objectMapper)
+        );
     }
 
     @Bean
@@ -37,8 +43,16 @@ public class KafkaConfig {
     public ConsumerFactory<String, Object> consumerFactory(KafkaProperties properties, ObjectMapper objectMapper) {
         JsonDeserializer<Object> valueDeserializer = new JsonDeserializer<>(objectMapper);
         valueDeserializer.addTrustedPackages(TRUSTED_PACKAGE);
-        Map<String, Object> consumerProps = properties.buildConsumerProperties();
-        return new DefaultKafkaConsumerFactory<>(consumerProps, new StringDeserializer(), valueDeserializer);
+
+        Map<String, Object> consumerProps = properties.buildConsumerProperties(null);
+
+        // El tercer parámetro 'false' evita que intente autoconfigurar el deserializador ya instanciado
+        return new DefaultKafkaConsumerFactory<>(
+                consumerProps,
+                new StringDeserializer(),
+                valueDeserializer,
+                false
+        );
     }
 
     @Bean
