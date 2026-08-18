@@ -20,6 +20,7 @@ public class TrackEventProducer {
     public void emitTrackPlayed(UUID userId, Long trackId) {
         TrackPlayedEvent event = new TrackPlayedEvent(userId, trackId, LocalDateTime.now());
         kafkaTemplate.send(TOPIC, trackId.toString(), event);
+
         log.info("Evento emitido a Kafka en tópico [{}]: Track {} reproducido por {}", TOPIC, trackId, userId);
     }
 }
