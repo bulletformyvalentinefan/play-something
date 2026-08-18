@@ -4,6 +4,9 @@ import com.spotify.group.domain.user.User;
 import com.spotify.group.domain.user.UserRepository;
 import com.spotify.group.infrastructure.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +22,10 @@ public class PlaylistService {
     private final UserRepository userRepository;
 
     @Transactional
+    @Caching(
+            cacheable = @Cacheable(value = "playlist", key = "#result.id()"),
+            evict = @CacheEvict(value = "user_playlists", key = "#request.userId()")
+    )
     public PlaylistResponse createPlaylist(CreatePlaylistRequest request) {
         User user = userRepository.findById(request.userId())
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado con ID: " + request.userId()));
@@ -33,6 +40,7 @@ public class PlaylistService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "user_playlists", key = "#userId")
     public List<PlaylistResponse> getPlaylistsByUserId(UUID userId) {
         return playlistRepository.findByUserId(userId).stream()
                 .map(PlaylistResponse::fromEntity)
@@ -40,6 +48,7 @@ public class PlaylistService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = "playlist", key = "#playlistId")
     public PlaylistResponse getPlaylistById(UUID playlistId) {
         Playlist playlist = playlistRepository.findById(playlistId)
                 .orElseThrow(() -> new ResourceNotFoundException("Playlist no encontrada con ID: " + playlistId));
@@ -47,6 +56,10 @@ public class PlaylistService {
     }
 
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(value = "playlist", key = "#playlistId"),
+            @CacheEvict(value = "user_playlists", allEntries = true)
+    })
     public void addTrackToPlaylist(UUID playlistId, Long deezerTrackId) {
         Playlist playlist = playlistRepository.findById(playlistId)
                 .orElseThrow(() -> new ResourceNotFoundException("Playlist no encontrada con ID: " + playlistId));
@@ -61,6 +74,10 @@ public class PlaylistService {
     }
 
     @Transactional
+    @Caching(evict = {
+            @CacheEvict(value = "playlist", key = "#playlistId"),
+            @CacheEvict(value = "user_playlists", allEntries = true)
+    })
     public void removeTrackFromPlaylist(UUID playlistId, Long deezerTrackId) {
         playlistTrackRepository.deleteByPlaylistIdAndDeezerTrackId(playlistId, deezerTrackId);
     }
