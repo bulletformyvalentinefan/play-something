@@ -1,7 +1,3 @@
-# 🎵 Spotify Clone — Fullstack Event-Driven
-
-> Plataforma de streaming de música con búsqueda de canciones (previews), gestión de playlists, reproducción con eventos asíncronos y caché distribuida.
-
 Clon funcional de Spotify construido con una arquitectura de **microservicios orientada a eventos**: el backend en Spring Boot sirve una API REST que consulta el catálogo de Deezer, cachea respuestas en Redis y emite métricas de reproducción hacia Kafka; el frontend en React ofrece una interfaz editorial en blanco y negro con tema claro/oscuro.
 
 [![CI Pipeline](https://github.com/bulletformyvalentinefan/play-something/actions/workflows/ci-build.yml/badge.svg)](https://github.com/bulletformyvalentinefan/play-something/actions/workflows/ci-build.yml)
