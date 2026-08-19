@@ -5,6 +5,7 @@ import com.spotify.group.domain.user.UserRepository;
 import com.spotify.group.infrastructure.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
@@ -23,7 +24,7 @@ public class PlaylistService {
 
     @Transactional
     @Caching(
-            cacheable = @Cacheable(value = "playlist", key = "#result.id()"),
+            put = @CachePut(value = "playlist", key = "#result.id()"),
             evict = @CacheEvict(value = "user_playlists", key = "#request.userId()")
     )
     public PlaylistResponse createPlaylist(CreatePlaylistRequest request) {
@@ -80,5 +81,17 @@ public class PlaylistService {
     })
     public void removeTrackFromPlaylist(UUID playlistId, Long deezerTrackId) {
         playlistTrackRepository.deleteByPlaylistIdAndDeezerTrackId(playlistId, deezerTrackId);
+    }
+
+    @Transactional
+    @Caching(evict = {
+            @CacheEvict(value = "playlist", key = "#playlistId"),
+            @CacheEvict(value = "user_playlists", allEntries = true)
+    })
+    public void deletePlaylist(UUID playlistId) {
+        playlistRepository.findById(playlistId)
+                .orElseThrow(() -> new ResourceNotFoundException("Playlist no encontrada con ID: " + playlistId));
+        playlistTrackRepository.deleteByPlaylistId(playlistId);
+        playlistRepository.deleteById(playlistId);
     }
 }

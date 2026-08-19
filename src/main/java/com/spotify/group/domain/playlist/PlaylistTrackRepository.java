@@ -8,4 +8,5 @@ public interface PlaylistTrackRepository extends JpaRepository<PlaylistTrack, UU
 
     Optional<PlaylistTrack> findByPlaylistIdAndDeezerTrackId(UUID playlistId, Long deezerTrackId);
     void deleteByPlaylistIdAndDeezerTrackId(UUID playlistId, Long deezerTrackId);
+    void deleteByPlaylistId(UUID playlistId);
 }
