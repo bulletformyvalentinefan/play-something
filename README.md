@@ -175,19 +175,3 @@ Las escrituras invalidan las entradas afectadas mediante `@CachePut`/`@CacheEvic
 1. **Sin secretos en el repositorio:** las credenciales viven en `docker-compose.yml` y `application.yml` (solo valores de desarrollo). Nunca se suben tokens ni claves de API.
 2. **Commits semánticos:** la historia usa [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`, `docs:`).
 3. **CI automático:** cada push a `main`/`features` compila y empaqueta el backend con GitHub Actions.
-
----
-
-## Próximos Pasos
-
-- Habilitar Swagger UI / OpenAPI para documentación viva de la API.
-- Añadir autenticación con JWT y protección por usuario de las playlists.
-- Pipeline de CI para el frontend (lint + build + deploy).
-- Tests de integración con Testcontainers (Oracle, Redis y Kafka).
-- Definir `LICENSE` y `CONTRIBUTING.md`.
-
----
-
-## Licencia
-
-Proyecto de carácter educativo; licencia aún por definir.
