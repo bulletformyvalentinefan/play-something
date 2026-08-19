@@ -168,10 +168,4 @@ Las escrituras invalidan las entradas afectadas mediante `@CachePut`/`@CacheEvic
 - **Productor:** `TrackEventProducer` — emite `TrackPlayedEvent` (`trackId`, `userId`, `playedAt`) al reproducir un track.
 - **Consumidor:** `TrackEventConsumer` — procesa la analítica de reproducción sin afectar la latencia de la API.
 
----
 
-## Buenas Prácticas
-
-1. **Sin secretos en el repositorio:** las credenciales viven en `docker-compose.yml` y `application.yml` (solo valores de desarrollo). Nunca se suben tokens ni claves de API.
-2. **Commits semánticos:** la historia usa [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`, `docs:`).
-3. **CI automático:** cada push a `main`/`features` compila y empaqueta el backend con GitHub Actions.
