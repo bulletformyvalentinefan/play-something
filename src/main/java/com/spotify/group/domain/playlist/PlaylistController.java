@@ -43,4 +43,10 @@ public class PlaylistController {
         playlistService.removeTrackFromPlaylist(playlistId, trackId);
         return ResponseEntity.noContent().build();
     }
+
+    @DeleteMapping("/playlists/{playlistId}")
+    public ResponseEntity<Void> deletePlaylist(@PathVariable UUID playlistId) {
+        playlistService.deletePlaylist(playlistId);
+        return ResponseEntity.noContent().build();
+    }
 }
