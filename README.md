@@ -1,4 +1,4 @@
-# 🎵 Spotify Clone — Fullstack Event-Driven
+# Spotify Clone — Fullstack Event-Driven
 
 > Plataforma de streaming de música con búsqueda de canciones (previews), gestión de playlists, reproducción con eventos asíncronos y caché distribuida.
 
@@ -15,7 +15,7 @@ Clon funcional de Spotify construido con una arquitectura de **microservicios or
 
 ---
 
-## 📐 Arquitectura del Sistema
+## Arquitectura del Sistema
 
 ```mermaid
 graph TD
@@ -31,7 +31,7 @@ El flujo de reproducción es **asíncrono**: el frontend solicita el track, el b
 
 ---
 
-## 🛠️ Stack Tecnológico
+## Stack Tecnológico
 
 | Capa | Tecnología |
 | --- | --- |
@@ -46,7 +46,7 @@ El flujo de reproducción es **asíncrono**: el frontend solicita el track, el b
 
 ---
 
-## 🗂️ Estructura del Repositorio
+## Estructura del Repositorio
 
 ```text
 .
@@ -59,7 +59,7 @@ El flujo de reproducción es **asíncrono**: el frontend solicita el track, el b
 
 ---
 
-## 🚀 Puesta en Marcha Local
+## Puesta en Marcha Local
 
 ### 1. Requisitos Previos
 
@@ -114,7 +114,7 @@ El frontend quedará accesible en **http://localhost:5173**. Vite redirige las p
 
 ---
 
-## 📡 Endpoints Principales (Contratos de API)
+## Endpoints Principales (Contratos de API)
 
 Base: `/api/v1/spotify` · Formato de respuesta: JSON · Errores: `400` validación, `404` no encontrado.
 
@@ -149,11 +149,11 @@ curl -X POST http://localhost:8080/api/v1/spotify/auth/register \
   -d '{"nombre":"Ana","email":"ana@mail.com"}'
 ```
 
-> ⚠️ No hay Swagger/OpenAPI habilitado actualmente; los contratos se documentan en esta tabla.
+> No hay Swagger/OpenAPI habilitado actualmente; los contratos se documentan en esta tabla.
 
 ---
 
-## 🧠 Caché y Eventos
+## Caché y Eventos
 
 ### Caché (Redis)
 
@@ -174,7 +174,7 @@ Las escrituras invalidan las entradas afectadas mediante `@CachePut`/`@CacheEvic
 
 ---
 
-## 🧩 Buenas Prácticas
+## Buenas Prácticas
 
 1. **Sin secretos en el repositorio:** las credenciales viven en `docker-compose.yml` y `application.yml` (solo valores de desarrollo). Nunca se suben tokens ni claves de API.
 2. **Commits semánticos:** la historia usa [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`, `docs:`).
@@ -182,7 +182,7 @@ Las escrituras invalidan las entradas afectadas mediante `@CachePut`/`@CacheEvic
 
 ---
 
-## 🗺️ Próximos Pasos
+## Próximos Pasos
 
 - Habilitar Swagger UI / OpenAPI para documentación viva de la API.
 - Añadir autenticación con JWT y protección por usuario de las playlists.
@@ -192,6 +192,6 @@ Las escrituras invalidan las entradas afectadas mediante `@CachePut`/`@CacheEvic
 
 ---
 
-## 📄 Licencia
+## Licencia
 
 Proyecto de carácter educativo; licencia aún por definir.
