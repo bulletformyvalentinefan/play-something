@@ -212,7 +212,7 @@ func (h *ProxyHandler) forwardWithMethod(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	b, _ := io.ReadAll(resp.Body)
-	// cache solo búsquedas exitosas 200
+	// cache solo búsquedas exitosas 200 por 30s (Sonora usa spclient.get_context sin este límite Web API)
 	if path == "/v1/search" && resp.StatusCode == http.StatusOK {
 		searchCacheMu.Lock()
 		hcopy := make(http.Header)

@@ -57,8 +57,18 @@ export const spotifySearch = (q, type = 'track', limit = 20) =>
     headers: authHeader(),
   }).then(async (r) => {
     if (r.status === 429) {
-      const ra = r.headers.get('Retry-After') || '30'
-      throw new Error(`Spotify rate limit — reintenta en ${ra}s (como Sonora, spclient evita este límite; usa búsqueda menos frecuente)`)
+      const ra = parseInt(r.headers.get('Retry-After') || '25', 10)
+      // Sonora usa spclient.wg.spotify.com que no tiene este límite; Web API sí — esperamos Retry-After y reintentamos una vez
+      await new Promise((res) => setTimeout(res, Math.min(ra, 10) * 1000))
+      const r2 = await fetch(`/api/v1/spotify/proxy/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`, {
+        headers: authHeader(),
+      })
+      if (r2.status === 429) {
+        const ra2 = r2.headers.get('Retry-After') || '30'
+        throw new Error(`Spotify rate limit — reintenta en ${ra2}s (spclient de Sonora evita esto; prueba término más específico)`)
+      }
+      if (!r2.ok) throw new Error(await r2.text().then((t) => t || `Error ${r2.status}`))
+      return r2.json()
     }
     if (!r.ok) {
       const t = await r.text()
