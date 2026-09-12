@@ -6,6 +6,7 @@ import (
 
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/config"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/handler"
+	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/spotify"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/cors"
@@ -33,9 +34,11 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok","service":"spotify-proxy","mode":"sonora-go-librespot"}`))
 	})
 
-	// Sonora-style: sin BDD, sin AES, token en memoria + Authorization header
-	authH := handler.NewAuthHandler(cfg)
-	proxyH := handler.NewProxyHandler()
+	// Sonora-style: Session go-librespot (client_id 65b... solo handshake, todo via spclient)
+	mgr := spotify.NewManager()
+	_ = mgr // placeholder para evitar unused si no se usa aún en stub Windows
+	authH := handler.NewAuthHandler(cfg, mgr)
+	proxyH := handler.NewProxyHandlerWithManager(mgr)
 	playerH := handler.NewPlayerHandler()
 
 	r.Route("/api/v1/spotify", func(r chi.Router) {

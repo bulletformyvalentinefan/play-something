@@ -11,31 +11,28 @@ import (
 
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/auth"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/config"
+	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/spotify"
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
 )
 
-// AuthHandler Sonora-style: sin BDD, sin AES, solo memoria + spclient.
-// El token vive en memoria (como Session en Sonora auth.rs:112) y
-// el frontend lo recibe y lo manda en Authorization en cada request.
+// AuthHandler Sonora-style: handshake OAuth con client_id oficial 65b... + PKCE en 127.0.0.1:8989/login
+// (auth.rs:11). El token NO va a api.spotify.com, se usa para crear Session de go-librespot (Mercury/AP)
+// como Sonora: Session::connect(Credentials::with_access_token) y luego todo via spclient.
 type AuthHandler struct {
-	cfg config.Config
-	mu  sync.Mutex
-	states map[string]string
-	// PKCE verifier per state (Sonora: PkceCodeChallenge::new_random_sha256)
+	cfg     config.Config
+	mgr     *spotify.Manager
+	mu      sync.Mutex
+	states  map[string]string
 	verifiers map[string]string
-	// userID (spotify id) -> token
-	tokens   map[string]*oauth2.Token
-	profiles map[string]spotifyProfile
 }
 
-func NewAuthHandler(cfg config.Config) *AuthHandler {
+func NewAuthHandler(cfg config.Config, mgr *spotify.Manager) *AuthHandler {
 	return &AuthHandler{
 		cfg:       cfg,
+		mgr:       mgr,
 		states:    make(map[string]string),
 		verifiers: make(map[string]string),
-		tokens:    make(map[string]*oauth2.Token),
-		profiles:  make(map[string]spotifyProfile),
 	}
 }
 
@@ -107,9 +104,8 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	if spotifyID == "" {
 		spotifyID = "spotify-user"
 	}
+	h.mgr.Save(spotifyID, tok, spotify.Profile{ID: profile.ID, DisplayName: profile.DisplayName, Email: profile.Email, Image: ""})
 	h.mu.Lock()
-	h.tokens[spotifyID] = tok
-	h.profiles[spotifyID] = profile
 	delete(h.states, state)
 	delete(h.verifiers, state)
 	h.mu.Unlock()
@@ -146,12 +142,9 @@ func fetchSpotifyProfile(ctx context.Context, tok *oauth2.Token) spotifyProfile 
 
 func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	if userID == "" {
-		// sin userId devuelve el primero vinculado (Sonora web)
-		for id, tok := range h.tokens {
-			p := h.profiles[id]
+		if id, tok, ok := h.mgr.First(); ok {
+			p, _ := h.mgr.GetProfile(id)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"userId": id, "linked": true, "spotifyUsername": p.ID, "display_name": p.DisplayName, "expiresAt": tok.Expiry,
 			})
@@ -160,12 +153,12 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"linked": false})
 		return
 	}
-	tok, ok := h.tokens[userID]
+	tok, ok := h.mgr.GetToken(userID)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"userId": userID, "linked": false})
 		return
 	}
-	p := h.profiles[userID]
+	p, _ := h.mgr.GetProfile(userID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"userId": userID, "linked": true, "spotifyUsername": p.ID, "display_name": p.DisplayName, "expiresAt": tok.Expiry,
 	})
@@ -173,22 +166,16 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
-	h.mu.Lock()
 	var tok *oauth2.Token
 	if userID == "" {
-		for _, t := range h.tokens {
-			tok = t
-			break
-		}
+		_, tok, _ = h.mgr.First()
 	} else {
-		tok = h.tokens[userID]
+		tok, _ = h.mgr.GetToken(userID)
 	}
-	h.mu.Unlock()
 	if tok == nil {
 		http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
 		return
 	}
-	// proxy fresco a Spotify con el token en memoria
 	req, _ := http.NewRequestWithContext(r.Context(), "GET", "https://api.spotify.com/v1/me", nil)
 	tok.SetAuthHeader(req)
 	resp, err := http.DefaultClient.Do(req)
@@ -204,37 +191,28 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
-	h.mu.Lock()
 	if userID == "" {
-		// borra todo (un usuario)
-		h.tokens = make(map[string]*oauth2.Token)
-		h.profiles = make(map[string]spotifyProfile)
+		h.mgr.Clear()
 	} else {
-		delete(h.tokens, userID)
-		delete(h.profiles, userID)
+		h.mgr.Delete(userID)
 	}
-	h.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "logged_out"})
 }
 
 func (h *AuthHandler) Token(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
-	h.mu.Lock()
 	var tok *oauth2.Token
+	var id string
 	if userID == "" {
-		for _, t := range h.tokens {
-			tok = t
-			break
-		}
+		id, tok, _ = h.mgr.First()
+		userID = id
 	} else {
-		tok = h.tokens[userID]
+		tok, _ = h.mgr.GetToken(userID)
 	}
-	h.mu.Unlock()
 	if tok == nil {
 		http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
 		return
 	}
-	// refresh si expiró (Sonora lo hace via Session::connect con cache)
 	if time.Now().After(tok.Expiry.Add(-30*time.Second)) && tok.RefreshToken != "" {
 		redirect := h.cfg.OAuthCallbackURL
 		if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
@@ -243,18 +221,9 @@ func (h *AuthHandler) Token(w http.ResponseWriter, r *http.Request) {
 		cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
 		src := cfg.TokenSource(context.Background(), tok)
 		if newTok, err := src.Token(); err == nil {
-			h.mu.Lock()
-			if userID == "" {
-				for id := range h.tokens {
-					h.tokens[id] = newTok
-					tok = newTok
-					break
-				}
-			} else {
-				h.tokens[userID] = newTok
-				tok = newTok
-			}
-			h.mu.Unlock()
+			p, _ := h.mgr.GetProfile(userID)
+			h.mgr.Save(userID, newTok, p)
+			tok = newTok
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

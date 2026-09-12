@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/spotify"
 )
 
 // cache Sonora-style: sin Redis, solo memoria 30s para búsquedas (evita 429 Web API)
@@ -32,15 +33,18 @@ func cacheKey(path string, q url.Values) string {
 	return path + "?" + q.Encode()
 }
 
-// ProxyHandler Sonora-style: sin BDD, solo forward con Authorization: Bearer.
-// El frontend manda el token que obtuvo en /auth, el Go lo pasa directo a api.spotify.com.
-// Esto es lo que hace Sonora con session.spclient() pero sin guardar nada en disco.
+// ProxyHandler Sonora-style: Web API solo como fallback, primario es Session spclient como Sonora.
 type ProxyHandler struct {
 	apiBase string
+	mgr     *spotify.Manager
 }
 
 func NewProxyHandler() *ProxyHandler {
 	return &ProxyHandler{apiBase: "https://api.spotify.com"}
+}
+
+func NewProxyHandlerWithManager(mgr *spotify.Manager) *ProxyHandler {
+	return &ProxyHandler{apiBase: "https://api.spotify.com", mgr: mgr}
 }
 
 func (h *ProxyHandler) Routes(r chi.Router) {
@@ -136,8 +140,29 @@ func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	q.Del("userId")
 	q.Del("access_token")
-	// Sonora: escaped() + spotify:search:{query} via spclient.get_context — aquí usamos Web API con cache 30s
-	// para evitar 429 con client_id oficial 65b... muy usado
+	// Sonora: spclient.ContextResolve("spotify:search:"+escaped) — primario, Web API solo fallback
+	if h.mgr != nil {
+		if token := resolveBearer(r); token != "" {
+			if userID, ok := h.mgr.FindUserByToken(token); ok {
+				if results, err := h.mgr.Search(r.Context(), userID, q.Get("q")); err == nil && len(results) > 0 {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("X-Source", "spclient")
+					// mapear SearchResult -> shape Web API para compat frontend
+					items := make([]map[string]any, 0, len(results))
+					for _, t := range results {
+						items = append(items, map[string]any{
+							"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "preview_url": nil,
+							"artists": []map[string]string{{"name": t.Artist}},
+							"album": map[string]any{"images": []map[string]string{{"url": t.AlbumCover}}},
+						})
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"tracks": map[string]any{"items": items}})
+					return
+				}
+			}
+		}
+	}
+	// fallback Web API con cache 30s para Windows dev / sin Session
 	key := cacheKey("/v1/search", q)
 	searchCacheMu.RLock()
 	if e, ok := searchCache[key]; ok && time.Now().Before(e.expiry) {
