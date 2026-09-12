@@ -1,9 +1,21 @@
 import { useState } from 'react'
-import { searchTracks } from '../api/tracks'
+import { spotifySearch } from '../api/spotify'
 import SearchBar from '../components/SearchBar'
 import TrackRow from '../components/TrackRow'
 import AddToPlaylistModal from '../components/AddToPlaylistModal'
 import { usePlayer } from '../context/PlayerContext'
+
+function toRow(t) {
+  return {
+    id: t.id,
+    title: t.name,
+    artistName: t.artists?.map((a) => a.name).join(', '),
+    albumCover: t.album?.images?.[0]?.url,
+    duration: Math.round((t.duration_ms || 0) / 1000),
+    previewUrl: t.preview_url,
+    spotifyUri: t.uri,
+  }
+}
 
 export default function Home() {
   const [results, setResults] = useState(null)
@@ -26,7 +38,10 @@ export default function Home() {
     setError(null)
     setQuery(term)
     try {
-      setResults(await searchTracks(term))
+      const data = await spotifySearch(term)
+      // Spotify Web API: { tracks: { items: [...] } }
+      const items = data?.tracks?.items ?? data?.items ?? []
+      setResults(items.map(toRow))
     } catch (err) {
       setError(err.message)
       setResults(null)

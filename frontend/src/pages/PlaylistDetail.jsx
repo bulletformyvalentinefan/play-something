@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import {
-  addTrackToPlaylist,
-  deletePlaylist,
-  getPlaylist,
-  removeTrackFromPlaylist,
-} from '../api/playlists'
-import { getTrack, searchTracks } from '../api/tracks'
+import { getSpotifyPlaylist, getSpotifyPlaylistTracks, addSpotifyTrack, removeSpotifyTrack, deleteSpotifyPlaylist } from '../api/spotify'
+import { spotifySearch } from '../api/spotify'
 import TrackRow from '../components/TrackRow'
 import SearchBar from '../components/SearchBar'
 import ConfirmModal from '../components/ConfirmModal'
+
+function toRow(t) {
+  return {
+    id: t.id,
+    title: t.name,
+    artistName: t.artists?.map((a) => a.name).join(', '),
+    albumCover: t.album?.images?.[0]?.url,
+    duration: Math.round((t.duration_ms || 0) / 1000),
+    previewUrl: t.preview_url,
+  }
+}
 
 export default function PlaylistDetail() {
   const { id } = useParams()
@@ -30,10 +36,18 @@ export default function PlaylistDetail() {
     setLoading(true)
     setError(null)
     try {
-      const p = await getPlaylist(id)
-      setPlaylist(p)
-      const resolved = await Promise.all(p.trackIds.map((tid) => getTrack(tid)))
-      setTracks(resolved)
+      const p = await getSpotifyPlaylist(id)
+      // p es Spotify playlist: { name, description, public, tracks: { items: [{track}] } }
+      // si viene paginado, usar p.tracks.items
+      setPlaylist({
+        id: p.id,
+        titulo: p.name,
+        descripcion: p.description || '',
+        esPublica: p.public,
+        trackIds: (p.tracks?.items ?? []).map((it) => it.track?.id).filter(Boolean),
+      })
+      const items = p.tracks?.items ?? (await getSpotifyPlaylistTracks(id).then((d) => d.items ?? []))
+      setTracks(items.map((it) => toRow(it.track)).filter((t) => t.id))
     } catch (e) {
       setError(e.message)
     } finally {
@@ -47,7 +61,7 @@ export default function PlaylistDetail() {
 
   const remove = async (trackId) => {
     try {
-      await removeTrackFromPlaylist(id, trackId)
+      await removeSpotifyTrack(id, trackId)
       await load()
     } catch (e) {
       setError(e.message)
@@ -65,7 +79,9 @@ export default function PlaylistDetail() {
     setQuery(q)
     setError(null)
     try {
-      setResults(await searchTracks(q))
+      const data = await spotifySearch(q)
+      const items = data?.tracks?.items ?? []
+      setResults(items.map(toRow))
     } catch (e) {
       setError(e.message)
       setResults(null)
@@ -78,7 +94,7 @@ export default function PlaylistDetail() {
     setBusyId(track.id)
     setError(null)
     try {
-      await addTrackToPlaylist(id, track.id)
+      await addSpotifyTrack(id, track.id)
       setAddedIds((prev) => new Set(prev).add(track.id))
       await load()
     } catch (e) {
@@ -91,7 +107,7 @@ export default function PlaylistDetail() {
   const confirmDelete = async () => {
     setDeleting(true)
     try {
-      await deletePlaylist(id)
+      await deleteSpotifyPlaylist(id)
       navigate('/library')
     } catch (e) {
       setError(e.message)

@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
-import { deletePlaylist, getUserPlaylists } from '../api/playlists'
+import { spotifyPlaylists, createSpotifyPlaylist, deleteSpotifyPlaylist } from '../api/spotify'
 import { useAuth } from '../context/AuthContext'
 import PlaylistRow from '../components/PlaylistRow'
 import CreatePlaylistModal from '../components/CreatePlaylistModal'
 import ConfirmModal from '../components/ConfirmModal'
+
+function toRow(p) {
+  return {
+    id: p.id,
+    titulo: p.name,
+    descripcion: p.description || '',
+    esPublica: p.public,
+    trackIds: [], // se carga en detalle
+    total: p.tracks?.total ?? 0,
+    cover: p.images?.[0]?.url,
+  }
+}
 
 export default function Library() {
   const { user } = useAuth()
@@ -17,14 +29,16 @@ export default function Library() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setPlaylists(await getUserPlaylists(user.id))
+      const data = await spotifyPlaylists()
+      const items = data?.items ?? data ?? []
+      setPlaylists(items.map(toRow))
       setError(null)
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
-  }, [user.id])
+  }, [])
 
   useEffect(() => {
     load()
@@ -34,7 +48,7 @@ export default function Library() {
     if (!deleteTarget) return
     setDeleting(true)
     try {
-      await deletePlaylist(deleteTarget.id)
+      await deleteSpotifyPlaylist(deleteTarget.id)
       setDeleteTarget(null)
       await load()
     } catch (e) {

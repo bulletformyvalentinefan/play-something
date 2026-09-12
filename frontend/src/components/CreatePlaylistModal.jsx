@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { createPlaylist } from '../api/playlists'
+import { createSpotifyPlaylist } from '../api/spotify'
 import Modal from './Modal'
 
 export default function CreatePlaylistModal({ user, onClose, onCreated }) {
@@ -14,7 +14,7 @@ export default function CreatePlaylistModal({ user, onClose, onCreated }) {
     setBusy(true)
     setError(null)
     try {
-      const playlist = await createPlaylist({ userId: user.id, titulo, descripcion, esPublica })
+      const playlist = await createSpotifyPlaylist(titulo, descripcion, esPublica)
       onCreated(playlist)
     } catch (err) {
       setError(err.message)

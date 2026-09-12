@@ -59,3 +59,52 @@ export const spotifyPlay = (body, deviceId) => {
     body: JSON.stringify(body),
   }).then((r) => ({ ok: r.ok, status: r.status }))
 }
+
+// Playlists CRUD via token — sin BDD, todo en Spotify con tu token
+export const createSpotifyPlaylist = (name, description, isPublic) =>
+  fetch(`/api/v1/spotify/proxy/me/playlists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ name, description, public: isPublic }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  })
+
+export const getSpotifyPlaylist = (id) =>
+  fetch(`/api/v1/spotify/proxy/playlists/${encodeURIComponent(id)}`, { headers: authHeader() }).then((r) => r.json())
+
+export const getSpotifyPlaylistTracks = (id) =>
+  fetch(`/api/v1/spotify/proxy/playlists/${encodeURIComponent(id)}/tracks`, { headers: authHeader() }).then((r) => r.json())
+
+export const addSpotifyTrack = (playlistId, trackId) =>
+  fetch(`/api/v1/spotify/proxy/playlists/${encodeURIComponent(playlistId)}/tracks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ uris: [`spotify:track:${trackId}`] }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  })
+
+export const removeSpotifyTrack = (playlistId, trackId) =>
+  fetch(`/api/v1/spotify/proxy/playlists/${encodeURIComponent(playlistId)}/tracks`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ tracks: [{ uri: `spotify:track:${trackId}` }] }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  })
+
+export const deleteSpotifyPlaylist = (id) =>
+  fetch(`/api/v1/spotify/proxy/playlists/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeader(),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  })
+
+export const getSpotifyTrack = (id) =>
+  fetch(`/api/v1/spotify/proxy/tracks/${encodeURIComponent(id)}`, { headers: authHeader() }).then((r) => r.json())
