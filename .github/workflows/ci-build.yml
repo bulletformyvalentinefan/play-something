@@ -1,32 +1,56 @@
-name: Java CI/CD Pipeline
+name: CI
 
 on:
   push:
-    branches: [ "main", "features" ]
+    branches: [ "main", "features", "feat/*" ]
   pull_request:
     branches: [ "main" ]
 
 jobs:
-  build:
+  java:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: maven
-
-      - name: Compile and Package with Maven
-        run: bash mvnw clean package -DskipTests
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - run: bash mvnw clean package -DskipTests
+      - uses: actions/upload-artifact@v4
         with:
           name: spotify-api-jar
           path: target/*.jar
           retention-days: 5
+
+  go-proxy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Install audio deps (CGO)
+        run: sudo apt-get update && sudo apt-get install -y libogg-dev libvorbis-dev libflac-dev libmpg123-dev pkg-config
+      - working-directory: spotify-proxy
+        run: |
+          go vet ./...
+          go build ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build

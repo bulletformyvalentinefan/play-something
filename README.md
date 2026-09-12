@@ -31,14 +31,15 @@ El flujo de reproducción es **asíncrono**: el frontend solicita el track, el b
 
 | Capa | Tecnología |
 | --- | --- |
-| **Frontend** | React 19, Vite 8, React Router 7, JavaScript (oxlint) |
-| **Backend** | Java 21, Spring Boot 3.4.3 (Web, Data JPA, Validation), Lombok |
+| **Frontend** | React 19, Vite 8, React Router 7, pnpm, JavaScript (oxlint) |
+| **Backend Java (legacy)** | Java 21, Spring Boot 3.4.3 (Web, Data JPA, Validation), Lombok |
+| **Backend Go (proxy Spotify)** | Go 1.26, chi, go-librespot v0.9.1 (ingeniería inversa), AES-GCM |
 | **Base de Datos** | Oracle Database 23c Free (JDBC thin) |
 | **Caché** | Redis 7 — TTL de 1 hora e invalidación declarativa (`@Cacheable`, `@CacheEvict`) |
 | **Mensajería / Streaming** | Apache Kafka 7.6 (modo KRaft) |
-| **Cliente externo** | Deezer API (búsqueda y previews de tracks) |
-| **Contenedores** | Docker Compose (Oracle, Redis, Kafka) |
-| **CI/CD** | GitHub Actions (compilación y empaquetado con Maven) |
+| **Cliente externo** | Spotify (vía go-librespot spclient/login5 + api.spotify.com) / Deezer (legacy) |
+| **Contenedores** | Docker Compose (Oracle, Redis, Kafka, spotify-proxy :8081) |
+| **CI/CD** | GitHub Actions (Maven + pnpm + Go) |
 
 ---
 
@@ -46,11 +47,14 @@ El flujo de reproducción es **asíncrono**: el frontend solicita el track, el b
 
 ```text
 .
-├── src/main/java/…              # Backend Spring Boot (dominios: user, track, playlist)
-├── src/main/resources/          # application.yml (configuración de arranque)
-├── frontend/                    # Aplicación React + Vite
-├── docker-compose.yml           # Oracle, Redis y Kafka
-└── .github/workflows/           # Pipeline de CI (Java CI/CD Pipeline)
+├── src/main/java/…              # Backend Spring Boot (legado, dominios: user, track, playlist)
+├── src/main/resources/          # application.yml
+├── spotify-proxy/               # Go service go-librespot (ing. inversa): auth redirect, proxy api.spotify.com, player
+│   ├── cmd/server/              # entrypoint :8081
+│   └── internal/{config,crypto,store,auth,handler,spotify}
+├── frontend/                    # React 19 + Vite + pnpm
+├── docker-compose.yml           # Oracle, Redis, Kafka, spotify-proxy
+└── .github/workflows/           # CI (Java + Go + pnpm)
 ```
 
 ---
@@ -60,8 +64,9 @@ El flujo de reproducción es **asíncrono**: el frontend solicita el track, el b
 ### 1. Requisitos Previos
 
 - **Docker** y **Docker Compose** instalados.
-- **JDK 21+** instalado.
-- **Node.js v20+** instalado (se usa npm).
+- **JDK 21+** instalado (para backend legado).
+- **Go 1.26+** instalado (para spotify-proxy).
+- **Node.js v20+** y **pnpm 9+** instalados (`npm i -g pnpm`).
 
 ### 2. Clonar el Repositorio
 
@@ -98,15 +103,26 @@ mvnw.cmd spring-boot:run
 
 El backend quedará expuesto en **http://localhost:8080** con base de rutas `/api/v1/spotify`.
 
-### 5. Ejecutar el Frontend
+### 5. Ejecutar el Proxy Go (Spotify)
+
+```bash
+cd spotify-proxy
+go run ./cmd/server
+# requiere CREDENTIAL_KEY=32bytes, ver internal/config/config.go
+# en Linux con CGO para audio: CGO_ENABLED=1 go run ./cmd/server
+```
+
+Queda en **http://localhost:8081**. Endpoints: `/api/v1/spotify/auth/start`, `/auth/callback`, `/proxy/me`, `/proxy/search`, `/player/*`.
+
+### 6. Ejecutar el Frontend
 
 ```bash
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
-El frontend quedará accesible en **http://localhost:5173**. Vite redirige las peticiones `/api` hacia el backend en el puerto 8080 (no se requiere configuración CORS).
+El frontend quedará accesible en **http://localhost:5173**. Vite proxea `/api/v1/spotify/auth|proxy|player` → `spotify-proxy:8081` y el resto de `/api` → `Spring:8080`.
 
 ---
 
