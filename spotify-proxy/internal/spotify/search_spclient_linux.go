@@ -68,6 +68,50 @@ func (m *Manager) searchViaSpclient(ctx context.Context, userID, query string) (
 	return out, nil
 }
 
+func (m *Manager) searchViaSpclientWithToken(ctx context.Context, token, query string) ([]SearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	deviceID := "1234567890abcdef1234567890abcdef1234567890"
+	sess, err := session.NewSessionFromOptions(ctx, &session.Options{
+		Log:        &librespot.NullLogger{},
+		DeviceType: devicespb.DeviceType_COMPUTER,
+		DeviceId:   deviceID,
+		Credentials: session.SpotifyTokenCredentials{Username: "spotify-user", Token: token},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer sess.Close()
+	uri := "spotify:search:" + escaped(query)
+	sp := sess.Spclient()
+	cctx, err := sp.ContextResolve(ctx, uri)
+	if err != nil {
+		return nil, fmt.Errorf("context resolve failed: %w", err)
+	}
+	var uris []string
+	for _, page := range cctx.Pages {
+		for _, tr := range page.Tracks {
+			if tr.Uri != "" && strings.HasPrefix(tr.Uri, "spotify:track:") {
+				uris = append(uris, tr.Uri)
+			}
+		}
+	}
+	if len(uris) == 0 {
+		return nil, nil
+	}
+	out := make([]SearchResult, 0, len(uris))
+	for _, uri := range uris {
+		id := strings.TrimPrefix(uri, "spotify:track:")
+		out = append(out, SearchResult{ID: id, Name: id, URI: uri})
+		if len(out) >= 20 {
+			break
+		}
+	}
+	return out, nil
+}
+
 func escaped(query string) string {
 	var b strings.Builder
 	for _, r := range query {

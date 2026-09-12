@@ -140,24 +140,22 @@ func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	q.Del("userId")
 	q.Del("access_token")
-	// Sonora: spclient.ContextResolve("spotify:search:"+escaped) — primario en Linux, Web API fallback en Windows dev
+	// Sonora: spclient.ContextResolve("spotify:search:"+escaped) — primario en Linux (0.0.0.0:8989), Web API solo fallback
 	if h.mgr != nil {
 		if token := resolveBearer(r); token != "" {
-			if userID, ok := h.mgr.FindUserByToken(token); ok {
-				if results, err := h.mgr.Search(r.Context(), userID, q.Get("q")); err == nil && len(results) > 0 {
-					w.Header().Set("Content-Type", "application/json")
-					w.Header().Set("X-Source", "spclient")
-					items := make([]map[string]any, 0, len(results))
-					for _, t := range results {
-						items = append(items, map[string]any{
-							"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "preview_url": nil,
-							"artists": []map[string]string{{"name": t.Artist}},
-							"album": map[string]any{"images": []map[string]string{{"url": t.AlbumCover}}},
-						})
-					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"tracks": map[string]any{"items": items}})
-					return
+			if results, err := h.mgr.SearchWithToken(r.Context(), token, q.Get("q")); err == nil && len(results) > 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Source", "spclient")
+				items := make([]map[string]any, 0, len(results))
+				for _, t := range results {
+					items = append(items, map[string]any{
+						"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "preview_url": nil,
+						"artists": []map[string]string{{"name": t.Artist}},
+						"album": map[string]any{"images": []map[string]string{{"url": t.AlbumCover}}},
+					})
 				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"tracks": map[string]any{"items": items}})
+				return
 			}
 		}
 	}

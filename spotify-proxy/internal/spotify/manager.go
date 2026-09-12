@@ -112,6 +112,13 @@ func (m *Manager) Search(ctx context.Context, userID, query string) ([]SearchRes
 	return m.searchViaWebAPI(ctx, userID, query)
 }
 
+func (m *Manager) SearchWithToken(ctx context.Context, token, query string) ([]SearchResult, error) {
+	if res, err := m.searchViaSpclientWithToken(ctx, token, query); err == nil && len(res) > 0 {
+		return res, nil
+	}
+	return webAPISearch(ctx, token, query)
+}
+
 func (m *Manager) searchViaWebAPI(ctx context.Context, userID, query string) ([]SearchResult, error) {
 	tok, ok := m.GetToken(userID)
 	if !ok {
