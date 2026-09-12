@@ -47,7 +47,7 @@ func main() {
 
 	authH := handler.NewAuthHandler(cfg, st, cryptor)
 	proxyH := handler.NewProxyHandler(cfg, st, cryptor)
-	playerH := handler.NewPlayerHandler()
+	playerH := handler.NewPlayerHandler(cfg, st, cryptor)
 
 	r.Route("/api/v1/spotify", func(r chi.Router) {
 		r.Route("/auth", authH.Routes)
