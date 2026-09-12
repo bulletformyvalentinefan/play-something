@@ -38,15 +38,34 @@ export const logoutSpotify = (userId) => {
   return fetch(`/api/v1/spotify/auth/logout${qs}`, { method: 'POST' }).then((r) => r.json())
 }
 
-export const spotifyMe = () => fetch(`/api/v1/spotify/proxy/me`, { headers: authHeader() }).then((r) => r.json())
+const checkOk = async (r) => {
+  if (r.status === 429) {
+    const ra = r.headers.get('Retry-After') || '30'
+    throw new Error(`Spotify rate limit — reintenta en ${ra}s`)
+  }
+  if (!r.ok) throw new Error(await r.text().then((t) => t || `Error ${r.status}`))
+  return r.json()
+}
+
+export const spotifyMe = () => fetch(`/api/v1/spotify/proxy/me`, { headers: authHeader() }).then(checkOk)
 
 export const spotifyPlaylists = (limit = 20, offset = 0) =>
-  fetch(`/api/v1/spotify/proxy/me/playlists?limit=${limit}&offset=${offset}`, { headers: authHeader() }).then((r) => r.json())
+  fetch(`/api/v1/spotify/proxy/me/playlists?limit=${limit}&offset=${offset}`, { headers: authHeader() }).then(checkOk)
 
 export const spotifySearch = (q, type = 'track', limit = 20) =>
   fetch(`/api/v1/spotify/proxy/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`, {
     headers: authHeader(),
-  }).then((r) => r.json())
+  }).then(async (r) => {
+    if (r.status === 429) {
+      const ra = r.headers.get('Retry-After') || '30'
+      throw new Error(`Spotify rate limit — reintenta en ${ra}s (como Sonora, spclient evita este límite; usa búsqueda menos frecuente)`)
+    }
+    if (!r.ok) {
+      const t = await r.text()
+      throw new Error(t || `Error ${r.status}`)
+    }
+    return r.json()
+  })
 
 export const spotifyPlayerStatus = () =>
   fetch(`/api/v1/spotify/player/status`, { headers: authHeader() }).then((r) => r.json())

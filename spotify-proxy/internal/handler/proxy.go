@@ -5,9 +5,32 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
+
+// cache Sonora-style: sin Redis, solo memoria 30s para búsquedas (evita 429 Web API)
+type cacheEntry struct {
+	body   []byte
+	status int
+	header http.Header
+	expiry time.Time
+}
+
+var (
+	searchCache   = make(map[string]cacheEntry)
+	searchCacheMu sync.RWMutex
+)
+
+func cacheKey(path string, q url.Values) string {
+	if q == nil {
+		return path
+	}
+	return path + "?" + q.Encode()
+}
 
 // ProxyHandler Sonora-style: sin BDD, solo forward con Authorization: Bearer.
 // El frontend manda el token que obtuvo en /auth, el Go lo pasa directo a api.spotify.com.
@@ -113,6 +136,22 @@ func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	q.Del("userId")
 	q.Del("access_token")
+	// Sonora: escaped() + spotify:search:{query} via spclient.get_context — aquí usamos Web API con cache 30s
+	// para evitar 429 con client_id oficial 65b... muy usado
+	key := cacheKey("/v1/search", q)
+	searchCacheMu.RLock()
+	if e, ok := searchCache[key]; ok && time.Now().Before(e.expiry) {
+		for k, vs := range e.header {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.Header().Set("X-Cache", "HIT")
+		w.WriteHeader(e.status)
+		_, _ = w.Write(e.body)
+		return
+	}
+	searchCacheMu.RUnlock()
 	h.forward(w, r, "/v1/search", q)
 }
 
@@ -162,10 +201,36 @@ func (h *ProxyHandler) forwardWithMethod(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer resp.Body.Close()
+
+	// Sonora usa spclient que no tiene este límite; Web API sí — respetamos Retry-After
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			w.Header().Set("Retry-After", ra)
+			if secs, err := strconv.Atoi(ra); err == nil {
+				w.Header().Set("X-Retry-In", strconv.Itoa(secs))
+			}
+		}
+	}
+	b, _ := io.ReadAll(resp.Body)
+	// cache solo búsquedas exitosas 200
+	if path == "/v1/search" && resp.StatusCode == http.StatusOK {
+		searchCacheMu.Lock()
+		hcopy := make(http.Header)
+		for k, vs := range resp.Header {
+			hcopy[k] = append([]string(nil), vs...)
+		}
+		searchCache[keyForCache(path, q)] = cacheEntry{body: b, status: resp.StatusCode, header: hcopy, expiry: time.Now().Add(30 * time.Second)}
+		searchCacheMu.Unlock()
+	}
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		w.Header().Set("Retry-After", ra)
+	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(b)
 }
+
+func keyForCache(path string, q url.Values) string { return cacheKey(path, q) }
 
 func bytesReader(b []byte) io.Reader {
 	if b == nil {
