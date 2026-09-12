@@ -7,11 +7,13 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Spotify OAuth usando client_id oficial de go-librespot (ingeniería inversa).
-// Este client_id es el que usa la app oficial de escritorio.
-// Scopes necesarios para leer playlists, perfil y streaming.
+// Spotify OAuth - soporta tanto el client_id oficial de go-librespot (ingeniería inversa)
+// como tu propia app de https://developer.spotify.com/dashboard
+// Ver Sonora: crates/music/src/spotify/auth.rs:9 DEFAULT_REDIRECT_URI=http://127.0.0.1:8989/login
+// y librespot oauth_sync.rs - solo 127.0.0.1 whitelisteado para el client oficial.
 const (
-	SpotifyClientID = "65b708073fc0480ea92a077233ca87bd"
+	DefaultClientID = "65b708073fc0480ea92a077233ca87bd" // oficial, NO editable, solo loopback whitelisteado
+	OfficialRedirectURI = "http://127.0.0.1:8989/login" // Sonora usa 8989, librespot 8898, desktop 4388
 	AuthURL         = "https://accounts.spotify.com/authorize"
 	TokenURL        = "https://accounts.spotify.com/api/token"
 )
@@ -27,13 +29,21 @@ var Scopes = []string{
 	"user-read-playback-state",
 }
 
-func OAuthConfig(redirectURL string) *oauth2.Config {
+func OAuthConfig(redirectURL string, clientID string) *oauth2.Config {
+	if clientID == "" {
+		clientID = DefaultClientID
+	}
 	return &oauth2.Config{
-		ClientID:    SpotifyClientID,
+		ClientID:    clientID,
 		Endpoint:    oauth2.Endpoint{AuthURL: AuthURL, TokenURL: TokenURL},
 		RedirectURL: redirectURL,
 		Scopes:      Scopes,
 	}
+}
+
+// IsOfficialClient indica si el redirect debe ser loopback whitelisteado
+func IsOfficialClient(clientID string) bool {
+	return clientID == "" || clientID == DefaultClientID
 }
 
 func RandomState() string {

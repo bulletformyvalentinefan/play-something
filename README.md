@@ -78,15 +78,29 @@ cd spotify-proxy
 $env:PORT="8081"
 $env:CREDENTIAL_KEY="0123456789abcdef0123456789abcdef"
 $env:FRONTEND_ORIGIN="http://localhost:5173"
-$env:OAUTH_CALLBACK_URL="http://localhost:8081/api/v1/spotify/auth/callback"
+# usar 127.0.0.1 NO localhost (Spotify lo bloquea desde 2025)
+$env:OAUTH_CALLBACK_URL="http://127.0.0.1:8081/api/v1/spotify/auth/callback"
 go run ./cmd/server
 
 # Linux/macOS
-PORT=8081 CREDENTIAL_KEY=0123456789abcdef0123456789abcdef go run ./cmd/server
+PORT=8081 CREDENTIAL_KEY=0123456789abcdef0123456789abcdef OAUTH_CALLBACK_URL=http://127.0.0.1:8081/api/v1/spotify/auth/callback go run ./cmd/server
 # con audio CGO: CGO_ENABLED=1 go run ./cmd/server
 ```
 
-Queda en **http://localhost:8081**. Endpoints: `POST /api/v1/spotify/auth/start`, `GET /auth/callback`, `GET /auth/me`, `GET /proxy/me`, `/proxy/search`, `/player/*`.
+Queda en **http://localhost:8081** (+ loopback `:8989` si usas client oficial) Endpoints: `POST /api/v1/spotify/auth/start`, `GET /auth/callback`, `GET /login` (whitelisted), `GET /auth/me`, `GET /proxy/me`, `/proxy/search`, `/player/*`.
+
+#### ⚠️ redirect_uri: Not matching configuration
+
+Si ves ese error es porque el `client_id` oficial `65b708073fc0480ea92a077233ca87bd` (de `go-librespot`/`Sonora`) **solo** tiene whitelisteado `http://127.0.0.1:8989/login` (ver `Sonora crates/music/src/spotify/auth.rs:9` y `librespot oauth_sync.rs`). `localhost` está bloqueado por Spotify desde 2025 y `/api/v1/...` no está whitelisteado.
+
+**Dos opciones:**
+
+| Opción | Qué hacer |
+| --- | --- |
+| **A. Seguir con client oficial (sin registrar nada)** | No toques env. El proxy ya levanta `:8989/login` además de `:8081` y fuerza `redirect_uri=http://127.0.0.1:8989/login` automáticamente cuando detecta el client oficial. Solo asegúrate de no tener `:8989` ocupado. |
+| **B. Crear tu propia app (recomendado para prod)** | Ve a https://developer.spotify.com/dashboard → Create App → Redirect URIs → añade **exactamente** `http://127.0.0.1:8081/api/v1/spotify/auth/callback` (¡con `127.0.0.1`, no `localhost`!) → copia `Client ID` → arranca con `SPOTIFY_CLIENT_ID=tu_id OAUTH_CALLBACK_URL=http://127.0.0.1:8081/api/v1/spotify/auth/callback` |
+
+Ref: https://developer.spotify.com/documentation/web-api/concepts/redirect_uri
 
 ### 5. Frontend
 

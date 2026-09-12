@@ -47,20 +47,26 @@ type startResponse struct {
 	State string `json:"state"`
 }
 
-// Start genera URL de OAuth redirect (ingeniería inversa: usa client_id oficial).
-// Ya NO requiere userId previo: inicia login directo con Spotify.
+// Start genera URL de OAuth redirect.
+// Si SPOTIFY_CLIENT_ID es el oficial 65b... SOLO funciona con http://127.0.0.1:8989/login (ver Sonora).
+// Si creas tu app en developer.spotify.com, usa esa URI whitelisteada en OAUTH_CALLBACK_URL (debe ser 127.0.0.1, no localhost).
 func (h *AuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 	var req startRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.UserID == "" {
 		req.UserID = r.URL.Query().Get("userId")
 	}
-	// userId es opcional ahora; si viene se respeta, si no se usa placeholder anon
 	anonID := req.UserID
 	if anonID == "" {
 		anonID = "anon"
 	}
-	cfg := auth.OAuthConfig(h.cfg.OAuthCallbackURL)
+	// elegir redirect según client_id: oficial -> 8989/login, custom -> el configurado
+	redirect := h.cfg.OAuthCallbackURL
+	if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
+		// forzar whitelisteado de Sonora/librespot si quedó el default viejo con 8081
+		redirect = auth.OfficialRedirectURI
+	}
+	cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
 	state := auth.RandomState()
 
 	h.mu.Lock()
@@ -68,7 +74,12 @@ func (h *AuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 
 	url := auth.AuthURLWithState(cfg, state)
-	writeJSON(w, http.StatusOK, startResponse{URL: url, State: state})
+	// hint para debug si es oficial y redirect no whitelisteado
+	hint := ""
+	if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect != auth.OfficialRedirectURI {
+		hint = "ADVERTENCIA: client_id oficial solo whitelistea " + auth.OfficialRedirectURI + " - crea tu app en developer.spotify.com o usa SPOTIFY_CLIENT_ID propio y registra " + redirect + " (debe ser 127.0.0.1, no localhost)"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"url": url, "state": state, "redirect_uri": redirect, "hint": hint})
 }
 
 func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +104,11 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := auth.OAuthConfig(h.cfg.OAuthCallbackURL)
+	redirect := h.cfg.OAuthCallbackURL
+	if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
+		redirect = auth.OfficialRedirectURI
+	}
+	cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
 	// Intercambiar code por token contra accounts.spotify.com
 	tok, err := cfg.Exchange(context.Background(), code)
 	if err != nil {
@@ -255,7 +270,11 @@ func (h *AuthHandler) Token(w http.ResponseWriter, r *http.Request) {
 	// Renovar si expiró y hay refresh_token
 	if time.Now().After(creds.ExpiresAt.Add(-30 * time.Second)) && creds.RefreshTokenEnc != "" {
 		refresh, _ := h.cryptor.Decrypt(creds.RefreshTokenEnc)
-		cfg := auth.OAuthConfig(h.cfg.OAuthCallbackURL)
+		redirect := h.cfg.OAuthCallbackURL
+		if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
+			redirect = auth.OfficialRedirectURI
+		}
+		cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
 		tok := &oauth2.Token{RefreshToken: refresh}
 		src := cfg.TokenSource(context.Background(), tok)
 		newTok, err := src.Token()

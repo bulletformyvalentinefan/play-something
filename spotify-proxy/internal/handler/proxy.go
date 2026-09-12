@@ -152,7 +152,11 @@ func (h *ProxyHandler) tryRefresh(ctx context.Context, r *http.Request) string {
 		return ""
 	}
 	refresh, _ := h.cryptor.Decrypt(creds.RefreshTokenEnc)
-	cfg := spotifyAuth.OAuthConfig(h.cfg.OAuthCallbackURL)
+	redirect := h.cfg.OAuthCallbackURL
+	if spotifyAuth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
+		redirect = spotifyAuth.OfficialRedirectURI
+	}
+	cfg := spotifyAuth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
 	tok := &oauth2.Token{RefreshToken: refresh, Expiry: time.Now().Add(-time.Hour)}
 	src := cfg.TokenSource(ctx, tok)
 	newTok, err := src.Token()

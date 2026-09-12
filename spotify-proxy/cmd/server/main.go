@@ -55,13 +55,31 @@ func main() {
 		r.Route("/player", playerH.Routes)
 	})
 
-	// Compat: frontend actual usa /api/v1/spotify/tracks/search -> proxear luego a /proxy/search
+	// Loopback handler para client_id oficial (Sonora style http://127.0.0.1:8989/login)
+	// Spotify solo whitelistea ese redirect para el client 65b...; lo exponemos además del callback en :8081
+	r.Get("/login", authH.Callback)
+
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		http.Redirect(w, &http.Request{}, "/health", http.StatusFound)
 	})
 
+	// Si usamos client oficial, levantar también listener en :8989 (whitelisted por Spotify)
+	if cfg.SpotifyClientID == "" || cfg.SpotifyClientID == "65b708073fc0480ea92a077233ca87bd" {
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/login", authH.Callback)
+			mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+				w.Write([]byte(`{"status":"ok","loopback":":8989"}`))
+			})
+			log.Printf("loopback OAuth listening on :8989 (for official client_id %s)", cfg.SpotifyClientID)
+			if err := http.ListenAndServe(":8989", mux); err != nil {
+				log.Printf("loopback :8989 error: %v", err)
+			}
+		}()
+	}
+
 	addr := ":" + cfg.Port
-	log.Printf("spotify-proxy listening on %s (frontend origin %s)", addr, cfg.FrontendOrigin)
+	log.Printf("spotify-proxy listening on %s (frontend origin %s) client_id=%s callback=%s", addr, cfg.FrontendOrigin, cfg.SpotifyClientID, cfg.OAuthCallbackURL)
 	if err := http.ListenAndServe(addr, r); err != nil {
 		log.Fatalf("listen: %v", err)
 	}

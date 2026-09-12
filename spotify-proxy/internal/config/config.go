@@ -16,6 +16,8 @@ type Config struct {
 	SpotifyCacheDir    string
 	LogLevel           string
 	OAuthCallbackURL   string
+	SpotifyClientID    string
+	SpotifyClientSecret string // solo si usas tu propia app con secret
 }
 
 func Load() Config {
@@ -29,7 +31,11 @@ func Load() Config {
 		SpotifyBitrate:   envIntOr("SPOTIFY_BITRATE", 320),
 		SpotifyCacheDir:  envOr("SPOTIFY_CACHE_DIR", ""),
 		LogLevel:         envOr("LOG_LEVEL", "info"),
-		OAuthCallbackURL: envOr("OAUTH_CALLBACK_URL", "http://localhost:8081/api/v1/spotify/auth/callback"),
+		// IMPORTANTE: Spotify bloquea localhost desde 2025, debe ser 127.0.0.1
+		// Si usas el client_id oficial 65b... SOLO está whitelisteado http://127.0.0.1:8989/login (ver Sonora crates/music/src/spotify/auth.rs:9)
+		OAuthCallbackURL: envOr("OAUTH_CALLBACK_URL", "http://127.0.0.1:8081/api/v1/spotify/auth/callback"),
+		SpotifyClientID:  envOr("SPOTIFY_CLIENT_ID", "65b708073fc0480ea92a077233ca87bd"),
+		SpotifyClientSecret: envOr("SPOTIFY_CLIENT_SECRET", ""),
 	}
 }
 
