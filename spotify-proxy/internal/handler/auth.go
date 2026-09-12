@@ -10,23 +10,30 @@ import (
 
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/auth"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/config"
-	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/crypto"
-	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/store"
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
 )
 
+// AuthHandler Sonora-style: sin BDD, sin AES, solo memoria + spclient.
+// El token vive en memoria (como Session en Sonora auth.rs:112) y
+// el frontend lo recibe y lo manda en Authorization en cada request.
 type AuthHandler struct {
-	cfg     config.Config
-	st      store.Store
-	cryptor *crypto.Cryptor
-	// state -> userID (anti-CSRF). En prod usar Redis.
-	mu     sync.Mutex
+	cfg config.Config
+	mu  sync.Mutex
+	// state -> anon placeholder
 	states map[string]string
+	// userID (spotify id) -> token
+	tokens   map[string]*oauth2.Token
+	profiles map[string]spotifyProfile
 }
 
-func NewAuthHandler(cfg config.Config, st store.Store, c *crypto.Cryptor) *AuthHandler {
-	return &AuthHandler{cfg: cfg, st: st, cryptor: c, states: make(map[string]string)}
+func NewAuthHandler(cfg config.Config) *AuthHandler {
+	return &AuthHandler{
+		cfg:      cfg,
+		states:   make(map[string]string),
+		tokens:   make(map[string]*oauth2.Token),
+		profiles: make(map[string]spotifyProfile),
+	}
 }
 
 func (h *AuthHandler) Routes(r chi.Router) {
@@ -38,46 +45,24 @@ func (h *AuthHandler) Routes(r chi.Router) {
 	r.Get("/token", h.Token)
 }
 
-type startRequest struct {
-	UserID string `json:"userId"`
-}
-
-type startResponse struct {
-	URL   string `json:"url"`
-	State string `json:"state"`
-}
-
-// Start genera URL de OAuth redirect.
-// Si SPOTIFY_CLIENT_ID es el oficial 65b... SOLO funciona con http://127.0.0.1:8989/login (ver Sonora).
-// Si creas tu app en developer.spotify.com, usa esa URI whitelisteada en OAUTH_CALLBACK_URL (debe ser 127.0.0.1, no localhost).
 func (h *AuthHandler) Start(w http.ResponseWriter, r *http.Request) {
-	var req startRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	if req.UserID == "" {
-		req.UserID = r.URL.Query().Get("userId")
-	}
-	anonID := req.UserID
-	if anonID == "" {
-		anonID = "anon"
-	}
-	// elegir redirect según client_id: oficial -> 8989/login, custom -> el configurado
+	// Sonora: DEFAULT_REDIRECT_URI=http://127.0.0.1:8989/login (auth.rs:12)
+	// Nosotros: si client oficial y callback es 8081/callback -> forzar 8989/login
 	redirect := h.cfg.OAuthCallbackURL
 	if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
-		// forzar whitelisteado de Sonora/librespot si quedó el default viejo con 8081
 		redirect = auth.OfficialRedirectURI
 	}
 	cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
 	state := auth.RandomState()
 
 	h.mu.Lock()
-	h.states[state] = anonID
+	h.states[state] = "anon"
 	h.mu.Unlock()
 
 	url := auth.AuthURLWithState(cfg, state)
-	// hint para debug si es oficial y redirect no whitelisteado
 	hint := ""
 	if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect != auth.OfficialRedirectURI {
-		hint = "ADVERTENCIA: client_id oficial solo whitelistea " + auth.OfficialRedirectURI + " - crea tu app en developer.spotify.com o usa SPOTIFY_CLIENT_ID propio y registra " + redirect + " (debe ser 127.0.0.1, no localhost)"
+		hint = "client_id oficial solo whitelistea " + auth.OfficialRedirectURI + " - crea app en developer.spotify.com o usa SPOTIFY_CLIENT_ID propio"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"url": url, "state": state, "redirect_uri": redirect, "hint": hint})
 }
@@ -86,7 +71,6 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 	errParam := r.URL.Query().Get("error")
-
 	if errParam != "" {
 		http.Error(w, `{"error":"`+errParam+`"}`, http.StatusBadRequest)
 		return
@@ -95,58 +79,31 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing code or state"}`, http.StatusBadRequest)
 		return
 	}
-
 	h.mu.Lock()
-	userID, ok := h.states[state]
+	_, ok := h.states[state]
 	h.mu.Unlock()
 	if !ok {
 		http.Error(w, `{"error":"invalid state"}`, http.StatusBadRequest)
 		return
 	}
-
 	redirect := h.cfg.OAuthCallbackURL
 	if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
 		redirect = auth.OfficialRedirectURI
 	}
 	cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
-	// Intercambiar code por token contra accounts.spotify.com
 	tok, err := cfg.Exchange(context.Background(), code)
 	if err != nil {
 		http.Error(w, `{"error":"token exchange failed: `+err.Error()+`"}`, http.StatusBadGateway)
 		return
 	}
-
-	// Cifrar tokens antes de persistir (AES-GCM base64)
-	accessEnc, _ := h.cryptor.Encrypt(tok.AccessToken)
-	refreshEnc := ""
-	if tok.RefreshToken != "" {
-		refreshEnc, _ = h.cryptor.Encrypt(tok.RefreshToken)
-	}
-
-	// Obtener perfil real de Spotify (id, display_name, email)
 	profile := fetchSpotifyProfile(r.Context(), tok)
-	spotifyUsername := profile.ID
-	if spotifyUsername == "" {
-		spotifyUsername = userID
+	spotifyID := profile.ID
+	if spotifyID == "" {
+		spotifyID = "spotify-user"
 	}
-	// El UserID estable pasa a ser el spotify id (si es anon) o el que vino
-	realUserID := userID
-	if userID == "anon" || userID == "" {
-		realUserID = spotifyUsername
-	}
-
-	creds := store.Credentials{
-		UserID:          realUserID,
-		SpotifyUsername: spotifyUsername,
-		DeviceID:        "play-something-" + realUserID[:min(8, len(realUserID))],
-		AccessTokenEnc:  accessEnc,
-		RefreshTokenEnc: refreshEnc,
-		ExpiresAt:       tok.Expiry,
-	}
-	_ = h.st.Save(creds)
-	// también guardar bajo anon para compat, pero principal es realUserID
-
 	h.mu.Lock()
+	h.tokens[spotifyID] = tok
+	h.profiles[spotifyID] = profile
 	delete(h.states, state)
 	h.mu.Unlock()
 
@@ -154,13 +111,17 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	if frontend == "" {
 		frontend = "http://localhost:5173"
 	}
-	http.Redirect(w, r, frontend+"/?spotify_linked=1&userId="+realUserID, http.StatusFound)
+	// Sonora guarda credencial en cache file; nosotros solo memoria y redirect con userId
+	http.Redirect(w, r, frontend+"/?spotify_linked=1&userId="+spotifyID, http.StatusFound)
 }
 
 type spotifyProfile struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
+	Images      []struct {
+		URL string `json:"url"`
+	} `json:"images"`
 }
 
 func fetchSpotifyProfile(ctx context.Context, tok *oauth2.Token) spotifyProfile {
@@ -176,64 +137,53 @@ func fetchSpotifyProfile(ctx context.Context, tok *oauth2.Token) spotifyProfile 
 	return p
 }
 
-func fetchSpotifyUsername(ctx context.Context, tok *oauth2.Token) string {
-	return fetchSpotifyProfile(ctx, tok).ID
-}
-
 func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if userID == "" {
-		// sin userId intenta devolver el primero vinculado (útil para flujo Spotify-only)
-		list, _ := h.st.List()
-		if len(list) == 0 {
-			writeJSON(w, http.StatusOK, map[string]any{"linked": false})
+		// sin userId devuelve el primero vinculado (Sonora web)
+		for id, tok := range h.tokens {
+			p := h.profiles[id]
+			writeJSON(w, http.StatusOK, map[string]any{
+				"userId": id, "linked": true, "spotifyUsername": p.ID, "display_name": p.DisplayName, "expiresAt": tok.Expiry,
+			})
 			return
 		}
-		creds := list[0]
-		writeJSON(w, http.StatusOK, map[string]any{
-			"userId":          creds.UserID,
-			"linked":          true,
-			"spotifyUsername": creds.SpotifyUsername,
-			"expiresAt":       creds.ExpiresAt,
-			"hasRefreshToken": creds.RefreshTokenEnc != "",
-		})
+		writeJSON(w, http.StatusOK, map[string]any{"linked": false})
 		return
 	}
-	creds, err := h.st.Get(userID)
-	if err != nil {
+	tok, ok := h.tokens[userID]
+	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"userId": userID, "linked": false})
 		return
 	}
+	p := h.profiles[userID]
 	writeJSON(w, http.StatusOK, map[string]any{
-		"userId":          userID,
-		"linked":          true,
-		"spotifyUsername": creds.SpotifyUsername,
-		"expiresAt":       creds.ExpiresAt,
-		"hasRefreshToken": creds.RefreshTokenEnc != "",
+		"userId": userID, "linked": true, "spotifyUsername": p.ID, "display_name": p.DisplayName, "expiresAt": tok.Expiry,
 	})
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
-	var creds store.Credentials
-	var err error
+	h.mu.Lock()
+	var tok *oauth2.Token
 	if userID == "" {
-		list, _ := h.st.List()
-		if len(list) == 0 {
-			http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
-			return
+		for _, t := range h.tokens {
+			tok = t
+			break
 		}
-		creds = list[0]
 	} else {
-		creds, err = h.st.Get(userID)
-		if err != nil {
-			http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
-			return
-		}
+		tok = h.tokens[userID]
 	}
-	access, _ := h.cryptor.Decrypt(creds.AccessTokenEnc)
+	h.mu.Unlock()
+	if tok == nil {
+		http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
+		return
+	}
+	// proxy fresco a Spotify con el token en memoria
 	req, _ := http.NewRequestWithContext(r.Context(), "GET", "https://api.spotify.com/v1/me", nil)
-	req.Header.Set("Authorization", "Bearer "+access)
+	tok.SetAuthHeader(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
@@ -247,52 +197,62 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
+	h.mu.Lock()
 	if userID == "" {
-		_ = json.NewDecoder(r.Body).Decode(&struct{ UserID string `json:"userId"` }{})
+		// borra todo (un usuario)
+		h.tokens = make(map[string]*oauth2.Token)
+		h.profiles = make(map[string]spotifyProfile)
+	} else {
+		delete(h.tokens, userID)
+		delete(h.profiles, userID)
 	}
-	if userID != "" {
-		_ = h.st.Delete(userID)
-	}
+	h.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "logged_out"})
 }
 
 func (h *AuthHandler) Token(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
+	h.mu.Lock()
+	var tok *oauth2.Token
 	if userID == "" {
-		http.Error(w, `{"error":"userId requerido"}`, http.StatusBadRequest)
-		return
+		for _, t := range h.tokens {
+			tok = t
+			break
+		}
+	} else {
+		tok = h.tokens[userID]
 	}
-	creds, err := h.st.Get(userID)
-	if err != nil {
+	h.mu.Unlock()
+	if tok == nil {
 		http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
 		return
 	}
-	// Renovar si expiró y hay refresh_token
-	if time.Now().After(creds.ExpiresAt.Add(-30 * time.Second)) && creds.RefreshTokenEnc != "" {
-		refresh, _ := h.cryptor.Decrypt(creds.RefreshTokenEnc)
+	// refresh si expiró (Sonora lo hace via Session::connect con cache)
+	if time.Now().After(tok.Expiry.Add(-30*time.Second)) && tok.RefreshToken != "" {
 		redirect := h.cfg.OAuthCallbackURL
 		if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect == "http://127.0.0.1:8081/api/v1/spotify/auth/callback" {
 			redirect = auth.OfficialRedirectURI
 		}
 		cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
-		tok := &oauth2.Token{RefreshToken: refresh}
 		src := cfg.TokenSource(context.Background(), tok)
-		newTok, err := src.Token()
-		if err == nil {
-			accessEnc, _ := h.cryptor.Encrypt(newTok.AccessToken)
-			creds.AccessTokenEnc = accessEnc
-			creds.ExpiresAt = newTok.Expiry
-			if newTok.RefreshToken != "" {
-				enc, _ := h.cryptor.Encrypt(newTok.RefreshToken)
-				creds.RefreshTokenEnc = enc
+		if newTok, err := src.Token(); err == nil {
+			h.mu.Lock()
+			if userID == "" {
+				for id := range h.tokens {
+					h.tokens[id] = newTok
+					tok = newTok
+					break
+				}
+			} else {
+				h.tokens[userID] = newTok
+				tok = newTok
 			}
-			_ = h.st.Save(creds)
+			h.mu.Unlock()
 		}
 	}
-	access, _ := h.cryptor.Decrypt(creds.AccessTokenEnc)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access_token": access,
-		"expires_at":   creds.ExpiresAt,
+		"access_token": tok.AccessToken,
+		"expires_at":   tok.Expiry,
 		"token_type":   "Bearer",
 	})
 }
@@ -301,11 +261,4 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
