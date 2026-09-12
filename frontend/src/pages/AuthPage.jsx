@@ -1,84 +1,32 @@
-import { useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 export default function AuthPage() {
-  const { user, login, register } = useAuth()
-  const navigate = useNavigate()
-  const [mode, setMode] = useState('login')
-  const [nombre, setNombre] = useState('')
-  const [email, setEmail] = useState('')
-  const [error, setError] = useState(null)
-  const [busy, setBusy] = useState(false)
+  const { user, loginWithSpotify, loading } = useAuth()
 
   if (user) return <Navigate to="/" replace />
 
-  const switchMode = (next) => {
-    setMode(next)
-    setError(null)
-  }
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      if (mode === 'register') await register(nombre, email)
-      else await login(email)
-      navigate('/')
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
     <section className="auth">
-      <h1 className="name">{mode === 'login' ? 'ingresar' : 'crear cuenta'}</h1>
-      <div className="auth-tabs">
-        <button
-          type="button"
-          className={`theme-btn${mode === 'login' ? ' active' : ''}`}
-          onClick={() => switchMode('login')}
-        >
-          ingresar
-        </button>
-        <button
-          type="button"
-          className={`theme-btn${mode === 'register' ? ' active' : ''}`}
-          onClick={() => switchMode('register')}
-        >
-          crear cuenta
-        </button>
-      </div>
-      <form className="form" onSubmit={submit}>
-        {mode === 'register' && (
-          <input
-            className="search-input"
-            placeholder="nombre"
-            value={nombre}
-            onChange={(e) => setNombre(e.target.value)}
-            minLength={2}
-            maxLength={50}
-            required
-            aria-label="Nombre"
-          />
-        )}
-        <input
-          className="search-input"
-          type="email"
-          placeholder="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          aria-label="Email"
-        />
-        {error && <p className="error">{error}</p>}
-        <button type="submit" className="theme-btn" disabled={busy}>
-          {busy ? '…' : mode === 'login' ? 'ingresar' : 'crear cuenta'}
-        </button>
-      </form>
+      <h1 className="name">play something</h1>
+      <p style={{ opacity: 0.7, marginBottom: '1.5rem', maxWidth: 420 }}>
+        Inicia sesión con tu cuenta real de Spotify. Usamos{' '}
+        <code>go-librespot</code> para hacernos pasar por cliente oficial y tomar
+        tu token (ingeniería inversa) — luego usamos tu token para mostrar tus
+        playlists y reproducir con tu cuenta.
+      </p>
+      <button
+        type="button"
+        className="theme-btn"
+        onClick={loginWithSpotify}
+        disabled={loading}
+        style={{ padding: '0.9rem 1.6rem', fontSize: '1rem' }}
+      >
+        {loading ? '…' : 'continuar con spotify'}
+      </button>
+      <p style={{ opacity: 0.5, marginTop: '1rem', fontSize: '0.8rem' }}>
+        Serás redirigido a accounts.spotify.com · scopes: playlist-read, streaming, user-read
+      </p>
     </section>
   )
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ func (h *AuthHandler) Routes(r chi.Router) {
 	r.Post("/start", h.Start)
 	r.Get("/callback", h.Callback)
 	r.Get("/status", h.Status)
+	r.Get("/me", h.Me)
 	r.Post("/logout", h.Logout)
 	r.Get("/token", h.Token)
 }
@@ -46,25 +48,25 @@ type startResponse struct {
 }
 
 // Start genera URL de OAuth redirect (ingeniería inversa: usa client_id oficial).
-// Frontend debe abrir la URL en popup/nueva pestaña.
+// Ya NO requiere userId previo: inicia login directo con Spotify.
 func (h *AuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 	var req startRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.UserID == "" {
 		req.UserID = r.URL.Query().Get("userId")
 	}
-	if req.UserID == "" {
-		http.Error(w, `{"error":"userId requerido"}`, http.StatusBadRequest)
-		return
+	// userId es opcional ahora; si viene se respeta, si no se usa placeholder anon
+	anonID := req.UserID
+	if anonID == "" {
+		anonID = "anon"
 	}
 	cfg := auth.OAuthConfig(h.cfg.OAuthCallbackURL)
 	state := auth.RandomState()
 
 	h.mu.Lock()
-	h.states[state] = req.UserID
+	h.states[state] = anonID
 	h.mu.Unlock()
 
-	// El token se intercambia en /callback, luego se cifra y guarda.
 	url := auth.AuthURLWithState(cfg, state)
 	writeJSON(w, http.StatusOK, startResponse{URL: url, State: state})
 }
@@ -106,56 +108,80 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		refreshEnc, _ = h.cryptor.Encrypt(tok.RefreshToken)
 	}
 
-	// Obtener perfil para spotifyUsername (opcional, best-effort)
-	spotifyUsername := userID // fallback
-	if tok.AccessToken != "" {
-		if uname := fetchSpotifyUsername(r.Context(), tok); uname != "" {
-			spotifyUsername = uname
-		}
+	// Obtener perfil real de Spotify (id, display_name, email)
+	profile := fetchSpotifyProfile(r.Context(), tok)
+	spotifyUsername := profile.ID
+	if spotifyUsername == "" {
+		spotifyUsername = userID
+	}
+	// El UserID estable pasa a ser el spotify id (si es anon) o el que vino
+	realUserID := userID
+	if userID == "anon" || userID == "" {
+		realUserID = spotifyUsername
 	}
 
 	creds := store.Credentials{
-		UserID:          userID,
+		UserID:          realUserID,
 		SpotifyUsername: spotifyUsername,
-		DeviceID:        "play-something-" + userID[:min(8, len(userID))],
+		DeviceID:        "play-something-" + realUserID[:min(8, len(realUserID))],
 		AccessTokenEnc:  accessEnc,
 		RefreshTokenEnc: refreshEnc,
 		ExpiresAt:       tok.Expiry,
 	}
 	_ = h.st.Save(creds)
+	// también guardar bajo anon para compat, pero principal es realUserID
 
 	h.mu.Lock()
 	delete(h.states, state)
 	h.mu.Unlock()
 
-	// Redirigir a frontend con éxito (deep link para popup)
 	frontend := h.cfg.FrontendOrigin
 	if frontend == "" {
 		frontend = "http://localhost:5173"
 	}
-	// El frontend debe cerrar popup y refrescar status
-	http.Redirect(w, r, frontend+"/?spotify_linked=1&userId="+userID, http.StatusFound)
+	http.Redirect(w, r, frontend+"/?spotify_linked=1&userId="+realUserID, http.StatusFound)
 }
 
-func fetchSpotifyUsername(ctx context.Context, tok *oauth2.Token) string {
+type spotifyProfile struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
+}
+
+func fetchSpotifyProfile(ctx context.Context, tok *oauth2.Token) spotifyProfile {
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.spotify.com/v1/me", nil)
 	tok.SetAuthHeader(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != 200 {
-		return ""
+		return spotifyProfile{}
 	}
 	defer resp.Body.Close()
-	var body struct {
-		ID string `json:"id"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	return body.ID
+	var p spotifyProfile
+	_ = json.NewDecoder(resp.Body).Decode(&p)
+	return p
+}
+
+func fetchSpotifyUsername(ctx context.Context, tok *oauth2.Token) string {
+	return fetchSpotifyProfile(ctx, tok).ID
 }
 
 func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("userId")
 	if userID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId requerido"})
+		// sin userId intenta devolver el primero vinculado (útil para flujo Spotify-only)
+		list, _ := h.st.List()
+		if len(list) == 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"linked": false})
+			return
+		}
+		creds := list[0]
+		writeJSON(w, http.StatusOK, map[string]any{
+			"userId":          creds.UserID,
+			"linked":          true,
+			"spotifyUsername": creds.SpotifyUsername,
+			"expiresAt":       creds.ExpiresAt,
+			"hasRefreshToken": creds.RefreshTokenEnc != "",
+		})
 		return
 	}
 	creds, err := h.st.Get(userID)
@@ -163,8 +189,6 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"userId": userID, "linked": false})
 		return
 	}
-	// Desencriptar solo para verificar expiración, no devolver token
-	_ = creds
 	writeJSON(w, http.StatusOK, map[string]any{
 		"userId":          userID,
 		"linked":          true,
@@ -172,6 +196,38 @@ func (h *AuthHandler) Status(w http.ResponseWriter, r *http.Request) {
 		"expiresAt":       creds.ExpiresAt,
 		"hasRefreshToken": creds.RefreshTokenEnc != "",
 	})
+}
+
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("userId")
+	var creds store.Credentials
+	var err error
+	if userID == "" {
+		list, _ := h.st.List()
+		if len(list) == 0 {
+			http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
+			return
+		}
+		creds = list[0]
+	} else {
+		creds, err = h.st.Get(userID)
+		if err != nil {
+			http.Error(w, `{"error":"not linked"}`, http.StatusNotFound)
+			return
+		}
+	}
+	access, _ := h.cryptor.Decrypt(creds.AccessTokenEnc)
+	req, _ := http.NewRequestWithContext(r.Context(), "GET", "https://api.spotify.com/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {

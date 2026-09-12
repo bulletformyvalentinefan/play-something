@@ -1,71 +1,96 @@
-import { createContext, useContext, useState, useCallback } from 'react'
-import { register as apiRegister, login as apiLogin } from '../api/users'
-import { startSpotifyAuth, getSpotifyStatus } from '../api/spotify'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { startSpotifyAuth, getSpotifyMe, logoutSpotify as apiLogout } from '../api/spotify'
 
 const AuthContext = createContext(null)
-
 const STORAGE_KEY = 'spotify_user'
-const SPOTIFY_KEY = 'spotify_linked'
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY))
+      const raw = localStorage.getItem(STORAGE_KEY)
+      return raw ? JSON.parse(raw) : null
     } catch {
       return null
     }
   })
-  const [spotifyLinked, setSpotifyLinked] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(SPOTIFY_KEY))
-    } catch {
-      return null
-    }
-  })
+  const [loading, setLoading] = useState(false)
 
   const persist = (u) => {
     setUser(u)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(u))
+    if (u) localStorage.setItem(STORAGE_KEY, JSON.stringify(u))
+    else localStorage.removeItem(STORAGE_KEY)
     return u
   }
 
-  const register = async (nombre, email) => persist(await apiRegister({ nombre, email }))
+  // Login directo con Spotify (go-librespot): no hay form local
+  const loginWithSpotify = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { url } = await startSpotifyAuth()
+      // Redirige directo a Spotify (accounts.spotify.com) con client_id oficial
+      window.location.href = url
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-  const login = async (email) => persist(await apiLogin({ email }))
-
-  const logout = () => {
-    setUser(null)
-    localStorage.removeItem(STORAGE_KEY)
-    setSpotifyLinked(null)
-    localStorage.removeItem(SPOTIFY_KEY)
-  }
-
-  const linkSpotify = useCallback(async () => {
-    if (!user?.id) throw new Error('Debes loguearte primero')
-    const { url } = await startSpotifyAuth(user.id)
-    // abrir popup OAuth (redirect con client_id oficial 65b...)
-    const w = window.open(url, 'spotify-auth', 'width=500,height=700')
-    if (!w) window.location.href = url
-    return url
+  const logout = useCallback(async () => {
+    try {
+      if (user?.id) await apiLogout(user.id)
+    } catch {
+      // ignore
+    }
+    persist(null)
   }, [user])
 
-  const refreshSpotifyStatus = useCallback(async () => {
-    if (!user?.id) return null
-    const s = await getSpotifyStatus(user.id)
-    setSpotifyLinked(s)
-    localStorage.setItem(SPOTIFY_KEY, JSON.stringify(s))
-    return s
+  const refresh = useCallback(async () => {
+    try {
+      const me = await getSpotifyMe(user?.id)
+      if (me?.id) {
+        const u = { id: me.id, display_name: me.display_name, email: me.email, image: me.images?.[0]?.url }
+        persist(u)
+        return u
+      }
+    } catch {
+      // not linked
+    }
+    return null
   }, [user])
 
-  // auto-check al montar y cuando vuelve de redirect ?spotify_linked=1
-  // el callback del Go redirige a /?spotify_linked=1&userId=...
-  if (typeof window !== 'undefined' && window.location.search.includes('spotify_linked=1') && user?.id) {
-    // defer para no tocar estado durante render
-    setTimeout(() => refreshSpotifyStatus(), 0)
-    window.history.replaceState({}, '', window.location.pathname)
-  }
+  // Al volver del callback Go redirige a /?spotify_linked=1&userId=xxx
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('spotify_linked') === '1') {
+      const userId = params.get('userId')
+      window.history.replaceState({}, '', window.location.pathname)
+      // fetchear perfil real y persistir
+      getSpotifyMe(userId)
+        .then((me) => {
+          if (me?.id) {
+            persist({ id: me.id, display_name: me.display_name, email: me.email, image: me.images?.[0]?.url })
+          } else if (userId) {
+            persist({ id: userId, display_name: userId })
+          }
+        })
+        .catch(() => {
+          if (userId) persist({ id: userId, display_name: userId })
+        })
+    }
+  }, [])
 
-  return <AuthContext.Provider value={{ user, login, register, logout, spotifyLinked, linkSpotify, refreshSpotifyStatus }}>{children}</AuthContext.Provider>
+  // Validar sesión al montar si hay user guardado
+  useEffect(() => {
+    if (user?.id) {
+      getSpotifyMe(user.id).then((me) => {
+        if (!me?.id) {
+          // token expirado o revocado
+          // no auto-logout agresivo, solo refrescar
+        }
+      }).catch(() => {})
+    }
+  }, [])
+
+  return <AuthContext.Provider value={{ user, loading, loginWithSpotify, logout, refresh }}>{children}</AuthContext.Provider>
 }
 
 export const useAuth = () => useContext(AuthContext)

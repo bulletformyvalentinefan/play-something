@@ -3,5 +3,6 @@ import { useAuth } from '../context/AuthContext'
 
 export default function ProtectedRoute() {
   const { user } = useAuth()
-  return user ? <Outlet /> : <Navigate to="/auth" replace />
+  // Solo Spotify cuenta, sin logeo local
+  return user?.id ? <Outlet /> : <Navigate to="/auth" replace />
 }
