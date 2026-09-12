@@ -5,14 +5,26 @@ import (
 	"net/http"
 
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/config"
+	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/crypto"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/handler"
+	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/store"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/cors"
 )
 
+func mustCryptor(key string) *crypto.Cryptor {
+	c, err := crypto.NewCryptor(key)
+	if err != nil {
+		log.Fatalf("CREDENTIAL_KEY invalid (debe ser 32 bytes): %v", err)
+	}
+	return c
+}
+
 func main() {
 	cfg := config.Load()
+	cryptor := mustCryptor(cfg.CredentialKey)
+	st := store.NewMemoryStore(cryptor)
 
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RequestID)
@@ -33,8 +45,8 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok","service":"spotify-proxy","mode":"go-librespot"}`))
 	})
 
-	authH := handler.NewAuthHandler()
-	proxyH := handler.NewProxyHandler()
+	authH := handler.NewAuthHandler(cfg, st, cryptor)
+	proxyH := handler.NewProxyHandler(cfg, st, cryptor)
 	playerH := handler.NewPlayerHandler()
 
 	r.Route("/api/v1/spotify", func(r chi.Router) {
