@@ -1,5 +1,4 @@
 services:
-
   redis:
     image: redis:7-alpine
     container_name: spotify-redis
@@ -7,12 +6,31 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
 
   spotify-proxy:
     build:
       context: ./spotify-proxy
       dockerfile: Dockerfile
+      cache_from:
+        - type=gha
     container_name: spotify-proxy
     ports:
       - "8081:8081"
@@ -21,23 +39,60 @@ services:
       PORT: 8081
       REDIS_ADDR: redis:6379
       FRONTEND_ORIGIN: http://localhost:3000
-      # Sonora: 127.0.0.1:8989/login whitelisted para client_id 65b... oficial, no localhost
       OAUTH_CALLBACK_URL: http://127.0.0.1:8989/login
       SPOTIFY_CLIENT_ID: "65b708073fc0480ea92a077233ca87bd"
       SPOTIFY_DEVICE_NAME: play-something
+      SPOTIFY_CACHE_DIR: /data/cache
+    volumes:
+      - spotify_data:/data/cache
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      cache_from:
+        - type=gha
     container_name: spotify-frontend
     ports:
       - "3000:80"
     depends_on:
-      - spotify-proxy
+      spotify-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
 
 volumes:
   redis_data:
+    name: spotify-redis-data
+  spotify_data:
+    name: spotify-cache-data
+
+networks:
+  default:
+    name: play-something
+    driver: bridge

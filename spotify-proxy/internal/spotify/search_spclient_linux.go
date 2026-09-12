@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
+	librespot "github.com/devgianlu/go-librespot"
 	"github.com/devgianlu/go-librespot/session"
 	devicespb "github.com/devgianlu/go-librespot/proto/spotify/connectstate/devices"
-	"github.com/sirupsen/logrus"
 )
 
 // searchViaSpclient Sonora-style: spotify:search:{escaped} via session.spclient().ContextResolve
@@ -26,30 +26,30 @@ func (m *Manager) searchViaSpclient(ctx context.Context, userID, query string) (
 	if query == "" {
 		return nil, nil
 	}
-	// crear Session efímera con el token (como Sonora login() -> Session::connect)
+	// 20 bytes hex = 40 chars, Sonora usa cache dir random, aquí dummy válido
+	deviceID := "1234567890abcdef1234567890abcdef1234567890"
 	sess, err := session.NewSessionFromOptions(ctx, &session.Options{
-		Log:        logrus.New(),
+		Log:        &librespot.NullLogger{},
 		DeviceType: devicespb.DeviceType_COMPUTER,
-		DeviceId:   "abcdef0123456789abcdef0123456789", // 20 bytes hex dummy, Sonora usa cache dir
+		DeviceId:   deviceID,
 		Credentials: session.SpotifyTokenCredentials{Username: userID, Token: tok.AccessToken},
 	})
 	if err != nil {
 		return nil, err
 	}
 	defer sess.Close()
-	// resolver contexto de búsqueda
 	uri := "spotify:search:" + escaped(query)
 	sp := sess.Spclient()
 	cctx, err := sp.ContextResolve(ctx, uri)
 	if err != nil {
 		return nil, fmt.Errorf("context resolve failed: %w", err)
 	}
-	// extraer URIs de tracks
+	// extraer URIs de tracks (connectpb.ContextPage.Tracks[].Uri es string)
 	var uris []string
 	for _, page := range cctx.Pages {
 		for _, tr := range page.Tracks {
-			if tr.Uri != nil && strings.HasPrefix(*tr.Uri, "spotify:track:") {
-				uris = append(uris, *tr.Uri)
+			if tr.Uri != "" && strings.HasPrefix(tr.Uri, "spotify:track:") {
+				uris = append(uris, tr.Uri)
 			}
 		}
 	}
@@ -61,7 +61,6 @@ func (m *Manager) searchViaSpclient(ctx context.Context, userID, query string) (
 	for _, uri := range uris {
 		id := strings.TrimPrefix(uri, "spotify:track:")
 		out = append(out, SearchResult{ID: id, Name: id, URI: uri})
-		// TODO: batch ExtendedMetadata para nombre/artista/cover como Sonora collection::metadata
 		if len(out) >= 20 {
 			break
 		}
@@ -85,3 +84,5 @@ func escaped(query string) string {
 	}
 	return b.String()
 }
+
+

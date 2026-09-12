@@ -22,7 +22,7 @@ func main() {
 	r.Use(chiMiddleware.Recoverer)
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{cfg.FrontendOrigin, "http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"},
+		AllowedOrigins:   []string{cfg.FrontendOrigin, "http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept"},
 		AllowCredentials: true,

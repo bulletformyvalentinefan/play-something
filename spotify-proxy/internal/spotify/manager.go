@@ -105,13 +105,10 @@ type SearchResult struct {
 }
 
 // Search tries spclient (Session) first, falls back to Web API.
-// ctx is request context, query is raw search term.
 func (m *Manager) Search(ctx context.Context, userID, query string) ([]SearchResult, error) {
-	// try spclient on linux
 	if res, err := m.searchViaSpclient(ctx, userID, query); err == nil && len(res) > 0 {
 		return res, nil
 	}
-	// fallback: Web API via token
 	return m.searchViaWebAPI(ctx, userID, query)
 }
 

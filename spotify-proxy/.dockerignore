@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Binaries
+*.o
+*.a
+*.so
+spotify-proxy
+spotify-proxy.exe
+*.dll
+
+# Testing
+*_test.go
+.coverprofile
+coverage.out
+
+# Logs
+*.log
+
+# IDEs
+.vscode
+.idea
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+dist/
+bin/
+vendor/
+
+# OS
+Thumbs.db
+
+# CI/CD
+.github/
+
+# Documentation
+*.md
+LICENSE
