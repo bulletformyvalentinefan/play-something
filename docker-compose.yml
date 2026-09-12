@@ -49,6 +49,27 @@ services:
       KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
 
+  spotify-proxy:
+    build:
+      context: ./spotify-proxy
+      dockerfile: Dockerfile
+    container_name: spotify-proxy
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: 8081
+      ORACLE_DSN: oracle://spotify_user:spotify_pwd@oracle-db:1521/FREEPDB1
+      REDIS_ADDR: redis:6379
+      FRONTEND_ORIGIN: http://localhost:5173
+      CREDENTIAL_KEY: "0123456789abcdef0123456789abcdef"
+      OAUTH_CALLBACK_URL: http://localhost:8081/api/v1/spotify/auth/callback
+      SPOTIFY_DEVICE_NAME: play-something
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
 volumes:
   oracle_data:
   redis_data:
