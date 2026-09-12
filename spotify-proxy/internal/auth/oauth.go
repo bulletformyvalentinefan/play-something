@@ -52,6 +52,16 @@ func RandomState() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+func RandomVerifier() string {
+	b := make([]byte, 64)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
 func AuthURLWithState(cfg *oauth2.Config, state string) string {
 	return cfg.AuthCodeURL(state, oauth2.AccessTypeOffline)
+}
+
+func AuthURLWithPKCE(cfg *oauth2.Config, state, verifier string) string {
+	return cfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
 }

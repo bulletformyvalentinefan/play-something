@@ -20,8 +20,9 @@ import (
 type AuthHandler struct {
 	cfg config.Config
 	mu  sync.Mutex
-	// state -> anon placeholder
 	states map[string]string
+	// PKCE verifier per state (Sonora: PkceCodeChallenge::new_random_sha256)
+	verifiers map[string]string
 	// userID (spotify id) -> token
 	tokens   map[string]*oauth2.Token
 	profiles map[string]spotifyProfile
@@ -29,10 +30,11 @@ type AuthHandler struct {
 
 func NewAuthHandler(cfg config.Config) *AuthHandler {
 	return &AuthHandler{
-		cfg:      cfg,
-		states:   make(map[string]string),
-		tokens:   make(map[string]*oauth2.Token),
-		profiles: make(map[string]spotifyProfile),
+		cfg:       cfg,
+		states:    make(map[string]string),
+		verifiers: make(map[string]string),
+		tokens:    make(map[string]*oauth2.Token),
+		profiles:  make(map[string]spotifyProfile),
 	}
 }
 
@@ -54,12 +56,14 @@ func (h *AuthHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
 	state := auth.RandomState()
+	verifier := auth.RandomVerifier()
 
 	h.mu.Lock()
 	h.states[state] = "anon"
+	h.verifiers[state] = verifier
 	h.mu.Unlock()
 
-	url := auth.AuthURLWithState(cfg, state)
+	url := auth.AuthURLWithPKCE(cfg, state, verifier)
 	hint := ""
 	if auth.IsOfficialClient(h.cfg.SpotifyClientID) && redirect != auth.OfficialRedirectURI {
 		hint = "client_id oficial solo whitelistea " + auth.OfficialRedirectURI + " - crea app en developer.spotify.com o usa SPOTIFY_CLIENT_ID propio"
@@ -81,6 +85,7 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	_, ok := h.states[state]
+	verifier := h.verifiers[state]
 	h.mu.Unlock()
 	if !ok {
 		http.Error(w, `{"error":"invalid state"}`, http.StatusBadRequest)
@@ -91,7 +96,7 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		redirect = auth.OfficialRedirectURI
 	}
 	cfg := auth.OAuthConfig(redirect, h.cfg.SpotifyClientID)
-	tok, err := cfg.Exchange(context.Background(), code)
+	tok, err := cfg.Exchange(context.Background(), code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		http.Error(w, `{"error":"token exchange failed: `+err.Error()+`"}`, http.StatusBadGateway)
 		return
@@ -105,6 +110,7 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	h.tokens[spotifyID] = tok
 	h.profiles[spotifyID] = profile
 	delete(h.states, state)
+	delete(h.verifiers, state)
 	h.mu.Unlock()
 
 	frontend := h.cfg.FrontendOrigin
