@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -117,8 +118,8 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	if frontend == "" {
 		frontend = "http://localhost:5173"
 	}
-	// Sonora guarda credencial en cache file; nosotros solo memoria y redirect con userId
-	http.Redirect(w, r, frontend+"/?spotify_linked=1&userId="+spotifyID, http.StatusFound)
+	// Incluimos token en redirect para persistir inmediato sin fetch extra
+	http.Redirect(w, r, frontend+"/?spotify_linked=1&userId="+url.QueryEscape(spotifyID)+"&display_name="+url.QueryEscape(profile.DisplayName)+"&access_token="+url.QueryEscape(tok.AccessToken), http.StatusFound)
 }
 
 type spotifyProfile struct {
