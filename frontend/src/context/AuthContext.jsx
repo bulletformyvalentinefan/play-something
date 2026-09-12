@@ -5,15 +5,33 @@ const AuthContext = createContext(null)
 const STORAGE_KEY = 'spotify_user'
 const TOKEN_KEY = 'spotify_token'
 
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      return raw ? JSON.parse(raw) : null
-    } catch {
-      return null
+function getInitialUser() {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('spotify_linked') === '1') {
+      const userId = params.get('userId')
+      const displayName = params.get('display_name')
+      const accessToken = params.get('access_token')
+      if (userId) {
+        const u = { id: userId, display_name: displayName || userId }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(u))
+        if (accessToken) localStorage.setItem(TOKEN_KEY, accessToken)
+        // limpiar query antes de que ProtectedRoute evalue
+        window.history.replaceState({}, '', window.location.pathname)
+        return u
+      }
     }
-  })
+  } catch {}
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(() => getInitialUser())
   const [loading, setLoading] = useState(false)
 
   const persist = (u, token) => {
@@ -43,36 +61,17 @@ export function AuthProvider({ children }) {
     persist(null)
   }, [user])
 
-  // Al volver del callback Go redirige a /?spotify_linked=1&userId=xxx&access_token=...&display_name=... (Sonora style)
+  // Enriquecer perfil en background si venimos de redirect (ya persistimos sync en getInitialUser)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('spotify_linked') === '1') {
-      const userId = params.get('userId')
-      const displayName = params.get('display_name')
-      const accessToken = params.get('access_token')
-      window.history.replaceState({}, '', window.location.pathname)
-      // Persist irnmediato sin esperar fetch — corrige "vuelve a la web pero no pasa nada"
-      if (accessToken) {
-        persist({ id: userId, display_name: displayName || userId }, accessToken)
-        // Enriquecer en background con /me si hace falta
-        getSpotifyMe(userId)
-          .then((me) => {
-            if (me?.id) persist({ id: me.id, display_name: me.display_name, email: me.email, image: me.images?.[0]?.url }, accessToken)
-          })
-          .catch(() => {})
-        return
-      }
-      // fallback si Go no mandó token (compat)
-      Promise.all([getSpotifyMe(userId).catch(() => null), getSpotifyToken(userId).catch(() => null)]).then(
-        ([me, tok]) => {
-          const token = tok?.access_token
-          if (me?.id) {
+    const token = localStorage.getItem(TOKEN_KEY)
+    if (user?.id && token) {
+      getSpotifyMe(user.id)
+        .then((me) => {
+          if (me?.id && me.display_name !== user.display_name) {
             persist({ id: me.id, display_name: me.display_name, email: me.email, image: me.images?.[0]?.url }, token)
-          } else if (userId) {
-            persist({ id: userId, display_name: displayName || userId }, token)
           }
-        },
-      )
+        })
+        .catch(() => {})
     }
   }, [])
 
