@@ -70,6 +70,7 @@ func (m *Manager) mgrGetPlaylistMock(ctx context.Context, token string) ([]Searc
 }
 
 // searchSpclientWithToken busca via spclient directo usando ContextResolve.
+// Devuelve ID y URI de los tracks encontrados (sin nombre/artista para evitar errors de proto).
 func (m *Manager) searchSpclientWithToken(ctx context.Context, token, userID, query string) ([]SearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -92,6 +93,7 @@ func (m *Manager) searchSpclientWithToken(ctx context.Context, token, userID, qu
 	if err != nil {
 		return nil, fmt.Errorf("context resolve failed: %w", err)
 	}
+	// Extraer URIs de tracks del contexto
 	var uris []string
 	for _, page := range cctx.Pages {
 		for _, tr := range page.Tracks {
@@ -103,15 +105,18 @@ func (m *Manager) searchSpclientWithToken(ctx context.Context, token, userID, qu
 	if len(uris) == 0 {
 		return nil, nil
 	}
-	// Devolver solo ID y URI (sin nombre/artista para evitar errors de proto)
+	// Limitar a 20 resultados
+	if len(uris) > 20 {
+		uris = uris[:20]
+	}
+	// Devolver ID y URI (sin nombre/artista para evitar fields undefined en proto)
 	out := make([]SearchResult, 0, len(uris))
 	for _, uri := range uris {
 		id := strings.TrimPrefix(uri, "spotify:track:")
 		out = append(out, SearchResult{
 			ID:   id,
 			URI:  uri,
-			Name: id,
-			Artist: "",
+			Name: id, // usar ID como nombre fallback
 		})
 		if len(out) >= 20 {
 			break
