@@ -140,10 +140,10 @@ func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	q.Del("userId")
 	q.Del("access_token")
-	// Sonora: spclient.ContextResolve("spotify:search:"+escaped) — primario en Linux (0.0.0.0:8989), Web API solo fallback
+	// Sonora: spclient.ContextResolve("spotify:search:"+escaped) — primario, sin fallback Web API
 	if h.mgr != nil {
 		if token := resolveBearer(r); token != "" {
-			if results, err := h.mgr.SearchWithToken(r.Context(), token, q.Get("q")); err == nil && len(results) > 0 {
+			if results, err := h.mgr.SearchWithToken(r.Context(), token, q.Get("q")); err == nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Source", "spclient")
 				items := make([]map[string]any, 0, len(results))
@@ -159,22 +159,10 @@ func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// fallback Web API con cache 30s para Windows dev / sin Session
-	key := cacheKey("/v1/search", q)
-	searchCacheMu.RLock()
-	if e, ok := searchCache[key]; ok && time.Now().Before(e.expiry) {
-		for k, vs := range e.header {
-			for _, v := range vs {
-				w.Header().Add(k, v)
-			}
-		}
-		w.Header().Set("X-Cache", "HIT")
-		w.WriteHeader(e.status)
-		_, _ = w.Write(e.body)
-		return
-	}
-	searchCacheMu.RUnlock()
-	h.forward(w, r, "/v1/search", q)
+	// Sin resultados: aún devolvemos 200 con X-Source: spclient para que el frontend no intente re-req
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"tracks": map[string]any{"items": []any{}}})
 }
 
 func (h *ProxyHandler) Track(w http.ResponseWriter, r *http.Request) {
