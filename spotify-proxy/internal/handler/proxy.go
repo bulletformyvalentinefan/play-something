@@ -148,11 +148,11 @@ func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("X-Source", "spclient")
 				items := make([]map[string]any, 0, len(results))
 				for _, t := range results {
-					items = append(items, map[string]any{
-						"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "preview_url": nil,
-						"artists": []map[string]string{{"name": t.Artist}},
-						"album": map[string]any{"images": []map[string]string{{"url": t.AlbumCover}}},
-					})
+				items = append(items, map[string]any{
+					"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "preview_url": nil,
+					"artists": []map[string]string{{"name": t.Artist}},
+					"album": map[string]any{"name": t.Album, "images": []map[string]string{{"url": t.AlbumCover}}},
+				})
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"tracks": map[string]any{"items": items}})
 				return

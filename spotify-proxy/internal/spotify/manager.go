@@ -2,17 +2,24 @@ package spotify
 
 import (
 	"context"
+	"log"
 	"sync"
 
+	"github.com/devgianlu/go-librespot/spclient"
 	"golang.org/x/oauth2"
 )
 
-// Manager Sonora-style: guarda token y Session por spotifyID.
-// En Linux crea Session real de go-librespot (Mercury/AP), en Windows es stub que usa Web API.
 type Manager struct {
 	mu       sync.RWMutex
 	tokens   map[string]*oauth2.Token
 	profiles map[string]Profile
+	sessions map[string]*spclientSession
+}
+
+type spclientSession struct {
+	sp    *spclient.Spclient
+	token string
+	clean func()
 }
 
 type Profile struct {
@@ -26,6 +33,7 @@ func NewManager() *Manager {
 	return &Manager{
 		tokens:   make(map[string]*oauth2.Token),
 		profiles: make(map[string]Profile),
+		sessions: make(map[string]*spclientSession),
 	}
 }
 
@@ -55,13 +63,21 @@ func (m *Manager) Delete(userID string) {
 	defer m.mu.Unlock()
 	delete(m.tokens, userID)
 	delete(m.profiles, userID)
+	if s, ok := m.sessions[userID]; ok {
+		s.clean()
+		delete(m.sessions, userID)
+	}
 }
 
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		s.clean()
+	}
 	m.tokens = make(map[string]*oauth2.Token)
 	m.profiles = make(map[string]Profile)
+	m.sessions = make(map[string]*spclientSession)
 }
 
 func (m *Manager) First() (string, *oauth2.Token, bool) {
@@ -94,32 +110,46 @@ func (m *Manager) FindUserByToken(token string) (string, bool) {
 	return "", false
 }
 
-// SessionSearch is implemented per OS (linux vs stub)
+func (m *Manager) getOrCreateSpclient(ctx context.Context, userID, accessToken string) (*spclient.Spclient, func(), error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if s, ok := m.sessions[userID]; ok && s.token == accessToken {
+		return s.sp, func() {}, nil
+	}
+
+	if s, ok := m.sessions[userID]; ok {
+		s.clean()
+		delete(m.sessions, userID)
+	}
+
+	profile := m.profiles[userID]
+	username := profile.ID
+	if username == "" {
+		username = userID
+	}
+
+	sp, cleanup, err := NewSpclientSession(ctx, username, accessToken)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	m.sessions[userID] = &spclientSession{sp: sp, token: accessToken, clean: cleanup}
+	log.Printf("[manager] spclient session created for %s", userID)
+	return sp, func() {}, nil
+}
+
 type SearchResult struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Artist     string `json:"artist"`
+	Album      string `json:"album"`
 	AlbumCover string `json:"albumCover"`
 	DurationMs int    `json:"duration_ms"`
 	URI        string `json:"uri"`
 }
 
-// Search tries spclient (Session) first, falls back to Web API.
 func (m *Manager) Search(ctx context.Context, userID, query string) ([]SearchResult, error) {
-	if res, err := m.searchViaSpclient(ctx, userID, query); err == nil && len(res) > 0 {
-		return res, nil
-	}
-	return m.searchViaWebAPI(ctx, userID, query)
-}
-
-func (m *Manager) SearchWithToken(ctx context.Context, token, query string) ([]SearchResult, error) {
-	if res, err := m.searchViaSpclientWithToken(ctx, token, query); err == nil && len(res) > 0 {
-		return res, nil
-	}
-	return webAPISearch(ctx, token, query)
-}
-
-func (m *Manager) searchViaWebAPI(ctx context.Context, userID, query string) ([]SearchResult, error) {
 	tok, ok := m.GetToken(userID)
 	if !ok {
 		if _, t, ok := m.First(); ok {
@@ -128,10 +158,33 @@ func (m *Manager) searchViaWebAPI(ctx context.Context, userID, query string) ([]
 			return nil, ErrNotLinked
 		}
 	}
+	sp, _, err := m.getOrCreateSpclient(ctx, userID, tok.AccessToken)
+	if err != nil {
+		return nil, err
+	}
+	if res, err := searchSpclient(ctx, sp, query); err == nil && len(res) > 0 {
+		return res, nil
+	}
 	return webAPISearch(ctx, tok.AccessToken, query)
+}
+
+func (m *Manager) SearchWithToken(ctx context.Context, token, query string) ([]SearchResult, error) {
+	username, _ := m.FindUserByToken(token)
+	if username == "" {
+		username = "spotify-user"
+	}
+	sp, _, err := m.getOrCreateSpclient(ctx, username, token)
+	if err != nil {
+		return webAPISearch(ctx, token, query)
+	}
+	if res, err := searchSpclient(ctx, sp, query); err == nil && len(res) > 0 {
+		return res, nil
+	}
+	return webAPISearch(ctx, token, query)
 }
 
 var ErrNotLinked = errNotLinked("not linked")
 
 type errNotLinked string
+
 func (e errNotLinked) Error() string { return string(e) }
