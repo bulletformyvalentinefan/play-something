@@ -14,7 +14,49 @@ env:
   FRONTEND_IMAGE: ghcr.io/bulletformyvalentinefan/play-something/frontend
 
 jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Install audio deps (CGO)
+        run: sudo apt-get update && sudo apt-get install -y libogg-dev libvorbis-dev libflac-dev libmpg123-dev pkg-config
+
+      - name: Vet and build backend
+        working-directory: spotify-proxy
+        run: |
+          go vet ./...
+          go build ./...
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install, lint and build frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm build
+
   build-backend:
+    needs: [test-backend]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,6 +94,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   build-frontend:
+    needs: [test-frontend]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -87,3 +130,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  trigger-watchtower-deploy:
+    needs: [test-backend, test-frontend, build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Trigger Watchtower Deploy
+        run: |
+          curl -f -X GET \
+            -H "Authorization: Bearer ${{ secrets.WATCHTOWER_TOKEN }}" \
+            https://deploy.plop.blog/v1/update
