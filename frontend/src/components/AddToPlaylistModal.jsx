@@ -1,27 +1,29 @@
 import { useEffect, useState } from 'react'
-import { getUserPlaylists, addTrackToPlaylist } from '../api/playlists'
-import { useAuth } from '../context/AuthContext'
+import { spotifyPlaylists, addSpotifyTrack } from '../api/spotify'
 import Modal from './Modal'
 
+function toRow(p) {
+  return { id: p.id, titulo: p.name }
+}
+
 export default function AddToPlaylistModal({ track, onClose, onAdded }) {
-  const { user } = useAuth()
   const [playlists, setPlaylists] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busyId, setBusyId] = useState(null)
 
   useEffect(() => {
-    getUserPlaylists(user.id)
-      .then((data) => setPlaylists(data))
+    spotifyPlaylists()
+      .then((data) => setPlaylists((data?.items ?? []).map(toRow)))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [user.id])
+  }, [])
 
   const add = async (playlist) => {
     setBusyId(playlist.id)
     setError(null)
     try {
-      await addTrackToPlaylist(playlist.id, track.id)
+      await addSpotifyTrack(playlist.id, track.id)
       onAdded()
     } catch (e) {
       setError(e.message)

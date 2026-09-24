@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
-import { startSpotifyAuth, getSpotifyMe, getSpotifyToken, logoutSpotify as apiLogout } from '../api/spotify'
+import { startSpotifyAuth, getSpotifyMe, logoutSpotify as apiLogout } from '../api/spotify'
 
 const AuthContext = createContext(null)
 const STORAGE_KEY = 'spotify_user'

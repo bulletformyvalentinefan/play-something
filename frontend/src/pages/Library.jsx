@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { spotifyPlaylists, createSpotifyPlaylist, deleteSpotifyPlaylist } from '../api/spotify'
-import { useAuth } from '../context/AuthContext'
+import { spotifyPlaylists, deleteSpotifyPlaylist } from '../api/spotify'
 import PlaylistRow from '../components/PlaylistRow'
 import CreatePlaylistModal from '../components/CreatePlaylistModal'
 import ConfirmModal from '../components/ConfirmModal'
@@ -18,7 +17,6 @@ function toRow(p) {
 }
 
 export default function Library() {
-  const { user } = useAuth()
   const [playlists, setPlaylists] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -92,7 +90,6 @@ export default function Library() {
 
       {showCreate && (
         <CreatePlaylistModal
-          user={user}
           onClose={() => setShowCreate(false)}
           onCreated={() => {
             setShowCreate(false)

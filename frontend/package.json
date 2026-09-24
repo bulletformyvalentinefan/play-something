@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test:login": "node test-login.mjs"
+    "test:login": "node scripts/test-login.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

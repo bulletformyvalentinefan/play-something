@@ -1,12 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
-import { playTrack } from '../api/tracks'
-import { useAuth } from './AuthContext'
 import { useRecentlyPlayed } from '../hooks/useRecentlyPlayed'
 
 const PlayerContext = createContext(null)
 
 export function PlayerProvider({ children }) {
-  const { user } = useAuth()
   const { tracks: recentlyPlayed, add: addRecent } = useRecentlyPlayed()
   const audioRef = useRef(null)
   const [current, setCurrent] = useState(null)
@@ -38,7 +35,7 @@ export function PlayerProvider({ children }) {
     }
   }, [])
 
-  const play = async (track) => {
+  const play = (track) => {
     const audio = audioRef.current
     const isSame = current && current.id === track.id
 
@@ -60,14 +57,6 @@ export function PlayerProvider({ children }) {
     audio.play().catch(() => setIsPlaying(false))
     setIsPlaying(true)
     addRecent(track)
-
-    if (user) {
-      try {
-        await playTrack(track.id, user.id)
-      } catch {
-        /* el evento de reproducción no bloquea el audio */
-      }
-    }
   }
 
   const toggle = () => {
