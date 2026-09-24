@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/devgianlu/go-librespot/spclient"
 	"golang.org/x/oauth2"
@@ -98,6 +99,24 @@ func (m *Manager) FindUserByToken(token string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// Warmup crea la sesión spclient en background para que la primera búsqueda
+// no pague el costo de conexión (~3s). Se llama tras el login OAuth.
+func (m *Manager) Warmup(userID string) {
+	tok, ok := m.GetToken(userID)
+	if !ok {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		owner := userID
+		if id, found := m.FindUserByToken(tok.AccessToken); found {
+			owner = id
+		}
+		_, _, _ = m.getOrCreateSpclient(ctx, owner, tok.AccessToken)
+	}()
 }
 
 func (m *Manager) getOrCreateSpclient(ctx context.Context, userID, accessToken string) (*spclient.Spclient, func(), error) {

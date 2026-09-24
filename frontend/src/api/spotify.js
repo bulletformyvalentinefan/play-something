@@ -65,7 +65,7 @@ const playResult = async (r) => {
   } catch {
     /* respuesta sin JSON (204/404 de Spotify) */
   }
-  return { ok: r.ok, status: r.status, body }
+  return { ok: r.ok, status: r.status, retryAfter: r.headers.get('Retry-After'), body }
 }
 
 export const spotifyPlayUris = (uris, deviceId) => {

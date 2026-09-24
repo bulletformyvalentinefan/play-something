@@ -66,23 +66,35 @@ export function PlayerProvider({ children }) {
     return () => clearInterval(t)
   }, [remote, isPlaying, current])
 
+  const playBusy = useRef(false)
+
   const playRemote = async (track) => {
-    const uri = track.spotifyUri || `spotify:track:${track.id}`
-    const res = await spotifyPlayUris([uri])
-    if (!res.ok) {
-      const reason = res.body?.error?.reason
-      setPlayError(reason === 'NO_ACTIVE_DEVICE' ? NO_DEVICE_MSG : `no se pudo reproducir (${res.status})`)
-      setIsPlaying(false)
-      return
+    if (playBusy.current) return
+    playBusy.current = true
+    try {
+      const uri = track.spotifyUri || `spotify:track:${track.id}`
+      const res = await spotifyPlayUris([uri])
+      if (!res.ok) {
+        if (res.status === 429) {
+          setPlayError(`límite de Spotify — reintentá en ${res.retryAfter || '30'}s`)
+        } else {
+          const reason = res.body?.error?.reason
+          setPlayError(reason === 'NO_ACTIVE_DEVICE' ? NO_DEVICE_MSG : `no se pudo reproducir (${res.status})`)
+        }
+        setIsPlaying(false)
+        return
+      }
+      audioRef.current.pause()
+      setCurrent(track)
+      setProgress(0)
+      setDuration(track.duration || 0)
+      setRemote(true)
+      setIsPlaying(true)
+      setPlayError(null)
+      addRecent(track)
+    } finally {
+      playBusy.current = false
     }
-    audioRef.current.pause()
-    setCurrent(track)
-    setProgress(0)
-    setDuration(track.duration || 0)
-    setRemote(true)
-    setIsPlaying(true)
-    setPlayError(null)
-    addRecent(track)
   }
 
   const play = (track) => {

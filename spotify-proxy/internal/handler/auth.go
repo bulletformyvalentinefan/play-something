@@ -109,6 +109,7 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		spotifyID = "spotify-user"
 	}
 	h.mgr.Save(spotifyID, tok, spotify.Profile{ID: profile.ID, DisplayName: profile.DisplayName, Email: profile.Email, Image: ""})
+	h.mgr.Warmup(spotifyID)
 	h.mu.Lock()
 	delete(h.states, state)
 	delete(h.verifiers, state)
