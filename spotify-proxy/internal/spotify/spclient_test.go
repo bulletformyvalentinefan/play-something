@@ -18,6 +18,10 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+
+	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
+	extmetadatapb "github.com/devgianlu/go-librespot/proto/spotify/extendedmetadata"
+	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
 )
 
 func TestSpclientLogin(t *testing.T) {
@@ -137,21 +141,152 @@ func TestSpclientLogin(t *testing.T) {
 		t.Logf("WARNING: not Premium (%s) — playback may not work", profile.Product)
 	}
 
+	username := profile.ID
+	if username == "" {
+		username = "spotify-user"
+		t.Logf("WARNING: profile.ID empty (Web API rate limit?) — using fallback username %q", username)
+	}
+
+	t.Logf("--- RAW context-resolve dump ---")
+	rawSp, rawCleanup, err := NewSpclientSession(context.Background(), username, token.AccessToken)
+	if err != nil {
+		t.Fatalf("raw spclient session failed: %v", err)
+	}
+	defer rawCleanup()
+
+	rawResp, err := rawSp.Request(context.Background(), "GET", "/context-resolve/v1/spotify:search:pierce+the+veil", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("raw context resolve failed: %v", err)
+	}
+	rawBody, _ := io.ReadAll(rawResp.Body)
+	rawResp.Body.Close()
+	t.Logf("raw context-resolve: status=%d bytes=%d", rawResp.StatusCode, len(rawBody))
+	if rawResp.StatusCode != 200 {
+		t.Fatalf("raw context resolve status %d: %s", rawResp.StatusCode, string(rawBody))
+	}
+	var rawCtx connectpb.Context
+	if err := json.Unmarshal(rawBody, &rawCtx); err != nil {
+		t.Fatalf("raw context decode failed: %v", err)
+	}
+	t.Logf("raw context: pages=%d", len(rawCtx.Pages))
+	var rawURIs []string
+	for pi, page := range rawCtx.Pages {
+		t.Logf("raw page %d: tracks=%d", pi, len(page.Tracks))
+		for ti, tr := range page.Tracks {
+			if ti < 3 {
+				t.Logf("raw track %d: uri=%q metadata=%v", ti, tr.Uri, tr.Metadata)
+			}
+			if strings.HasPrefix(tr.Uri, "spotify:track:") && len(rawURIs) < 3 {
+				rawURIs = append(rawURIs, tr.Uri)
+			}
+		}
+	}
+
+	t.Logf("--- RAW extended-metadata dump (%d uris) ---", len(rawURIs))
+	rawReqs := make([]*extmetadatapb.EntityRequest, len(rawURIs))
+	for i, uri := range rawURIs {
+		rawReqs[i] = &extmetadatapb.EntityRequest{
+			EntityUri: uri,
+			Query: []*extmetadatapb.ExtensionQuery{{
+				ExtensionKind: extmetadatapb.ExtensionKind_TRACK_V4,
+			}},
+		}
+	}
+	rawMeta, err := rawSp.ExtendedMetadata(context.Background(), &extmetadatapb.BatchedEntityRequest{
+		EntityRequest: rawReqs,
+	})
+	if err != nil {
+		t.Fatalf("raw extended metadata failed: %v", err)
+	}
+	t.Logf("raw extended-metadata: arrays=%d", len(rawMeta.GetExtendedMetadata()))
+	for _, arr := range rawMeta.GetExtendedMetadata() {
+		t.Logf("raw array: kind=%v items=%d", arr.GetExtensionKind(), len(arr.GetExtensionData()))
+		for _, ed := range arr.GetExtensionData() {
+			t.Logf("raw entity: uri=%q status=%d type=%q",
+				ed.GetEntityUri(), ed.GetHeader().GetStatusCode(), ed.GetExtensionData().GetTypeUrl())
+			var rtrack metadatapb.Track
+			if err := ed.GetExtensionData().UnmarshalTo(&rtrack); err != nil {
+				t.Fatalf("raw track unmarshal failed: %v", err)
+			}
+			var anames []string
+			for _, a := range rtrack.GetArtist() {
+				anames = append(anames, a.GetName())
+			}
+			coverN, coverGroupN := 0, 0
+			if alb := rtrack.GetAlbum(); alb != nil {
+				coverN = len(alb.GetCover())
+				if cg := alb.GetCoverGroup(); cg != nil {
+					coverGroupN = len(cg.GetImage())
+				}
+			}
+			t.Logf("raw track: name=%q artists=%q album=%q duration=%d popularity=%d explicit=%v covers=%d coverGroup=%d files=%d",
+				rtrack.GetName(), strings.Join(anames, ", "), rtrack.GetAlbum().GetName(),
+				rtrack.GetDuration(), rtrack.GetPopularity(), rtrack.GetExplicit(),
+				coverN, coverGroupN, len(rtrack.GetFile()))
+		}
+	}
+
 	t.Logf("Creating librespot session + searching via spclient...")
-	results, err := SearchViaSpclient(context.Background(), token.AccessToken, profile.ID, "pierce the veil")
+	results, err := SearchViaSpclient(context.Background(), token.AccessToken, username, "pierce the veil")
 	if err != nil {
 		t.Fatalf("spclient search failed: %v", err)
 	}
 	if len(results) == 0 {
 		t.Fatal("no results from spclient")
 	}
-	t.Logf("SUCCESS: %d results:", len(results))
+	if len(results) > 20 {
+		t.Errorf("expected at most 20 results, got %d", len(results))
+	}
+
+	var withName, withArtist, withAlbum, withDuration, withCover int
+	seen := make(map[string]bool)
 	for i, r := range results {
-		if i >= 10 {
-			t.Logf("  ... and %d more", len(results)-10)
-			break
+		if r.URI == "" || !strings.HasPrefix(r.URI, "spotify:track:") {
+			t.Errorf("result %d: bad URI %q", i, r.URI)
+			continue
 		}
-		t.Logf("  %d. %s — %s [%s] (%dms) %s", i+1, r.Name, r.Artist, r.Album, r.DurationMs, r.URI)
+		if want := strings.TrimPrefix(r.URI, "spotify:track:"); r.ID != want {
+			t.Errorf("result %d: ID %q does not match URI %q", i, r.ID, r.URI)
+		}
+		if seen[r.URI] {
+			t.Errorf("result %d: duplicate URI %q", i, r.URI)
+		}
+		seen[r.URI] = true
+		if r.Name != "" && r.Name != r.ID {
+			withName++
+		}
+		if r.Artist != "" {
+			withArtist++
+		}
+		if r.Album != "" {
+			withAlbum++
+		}
+		if r.DurationMs > 0 {
+			withDuration++
+		}
+		if strings.HasPrefix(r.AlbumCover, "https://i.scdn.co/image/") {
+			withCover++
+		}
+		if i < 10 {
+			t.Logf("  %d. %s — %s [%s] (%dms) %s", i+1, r.Name, r.Artist, r.Album, r.DurationMs, r.URI)
+		}
+	}
+	if len(results) > 10 {
+		t.Logf("  ... and %d more", len(results)-10)
+	}
+	t.Logf("enriched: name=%d/%d artist=%d/%d album=%d/%d duration=%d/%d cover=%d/%d",
+		withName, len(results), withArtist, len(results), withAlbum, len(results),
+		withDuration, len(results), withCover, len(results))
+
+	n := len(results)
+	if withName*100/n < 80 {
+		t.Errorf("expected >=80%% results with enriched name, got %d/%d", withName, n)
+	}
+	if withArtist*100/n < 80 {
+		t.Errorf("expected >=80%% results with artist, got %d/%d", withArtist, n)
+	}
+	if withDuration != n {
+		t.Errorf("expected all results with duration > 0, got %d/%d", withDuration, n)
 	}
 }
 
