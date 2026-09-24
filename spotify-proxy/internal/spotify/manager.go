@@ -149,38 +149,37 @@ type SearchResult struct {
 	URI        string `json:"uri"`
 }
 
-func (m *Manager) Search(ctx context.Context, userID, query string) ([]SearchResult, error) {
+func (m *Manager) Search(ctx context.Context, userID, query string, limit int) ([]SearchResult, error) {
 	tok, ok := m.GetToken(userID)
 	if !ok {
-		if _, t, ok := m.First(); ok {
-			tok = t
-		} else {
+		var t *oauth2.Token
+		if userID, t, ok = m.First(); !ok {
 			return nil, ErrNotLinked
 		}
+		tok = t
+	}
+	// Key the cached session by the token owner, not the requested userID,
+	// so a fallback token never gets stored under the wrong user.
+	if owner, found := m.FindUserByToken(tok.AccessToken); found {
+		userID = owner
 	}
 	sp, _, err := m.getOrCreateSpclient(ctx, userID, tok.AccessToken)
 	if err != nil {
 		return nil, err
 	}
-	if res, err := searchSpclient(ctx, sp, query); err == nil && len(res) > 0 {
-		return res, nil
-	}
-	return webAPISearch(ctx, tok.AccessToken, query)
+	return searchSpclient(ctx, sp, query, limit)
 }
 
-func (m *Manager) SearchWithToken(ctx context.Context, token, query string) ([]SearchResult, error) {
+func (m *Manager) SearchWithToken(ctx context.Context, token, query string, limit int) ([]SearchResult, error) {
 	username, _ := m.FindUserByToken(token)
 	if username == "" {
 		username = "spotify-user"
 	}
 	sp, _, err := m.getOrCreateSpclient(ctx, username, token)
 	if err != nil {
-		return webAPISearch(ctx, token, query)
+		return nil, err
 	}
-	if res, err := searchSpclient(ctx, sp, query); err == nil && len(res) > 0 {
-		return res, nil
-	}
-	return webAPISearch(ctx, token, query)
+	return searchSpclient(ctx, sp, query, limit)
 }
 
 var ErrNotLinked = errNotLinked("not linked")

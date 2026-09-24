@@ -143,7 +143,13 @@ func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {
 	// Sonora: spclient.ContextResolve("spotify:search:"+escaped) — primario, sin fallback Web API
 	if h.mgr != nil {
 		if token := resolveBearer(r); token != "" {
-			if results, err := h.mgr.SearchWithToken(r.Context(), token, q.Get("q")); err == nil {
+			limit := spotify.DefaultSearchLimit
+			if v := q.Get("limit"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					limit = n
+				}
+			}
+			if results, err := h.mgr.SearchWithToken(r.Context(), token, q.Get("q"), limit); err == nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Source", "spclient")
 				items := make([]map[string]any, 0, len(results))

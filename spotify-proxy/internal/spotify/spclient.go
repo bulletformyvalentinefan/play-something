@@ -87,15 +87,28 @@ func SearchViaSpclient(ctx context.Context, token, username, query string) ([]Se
 		return nil, err
 	}
 	defer cleanup()
-	return searchSpclient(ctx, sp, query)
+	return searchSpclient(ctx, sp, query, DefaultSearchLimit)
 }
+
+const (
+	// DefaultSearchLimit is used when the caller passes limit <= 0.
+	DefaultSearchLimit = 20
+	// MaxSearchLimit caps a single search to one ExtendedMetadata batch.
+	MaxSearchLimit = 50
+)
 
 // searchSpclient searches via spclient ContextResolve + ExtendedMetadata enrichment.
 // Expects an already-connected spclient session (avoids reconnect overhead).
-func searchSpclient(ctx context.Context, sp *spclient.Spclient, query string) ([]SearchResult, error) {
+func searchSpclient(ctx context.Context, sp *spclient.Spclient, query string, limit int) ([]SearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, nil
+	}
+	if limit <= 0 {
+		limit = DefaultSearchLimit
+	}
+	if limit > MaxSearchLimit {
+		limit = MaxSearchLimit
 	}
 
 	uri := "spotify:search:" + escapeQuery(query)
@@ -126,11 +139,11 @@ func searchSpclient(ctx context.Context, sp *spclient.Spclient, query string) ([
 				continue
 			}
 			entries = append(entries, trackEntry{uri: tr.Uri})
-			if len(entries) >= 20 {
+			if len(entries) >= limit {
 				break
 			}
 		}
-		if len(entries) >= 20 {
+		if len(entries) >= limit {
 			break
 		}
 	}
@@ -209,20 +222,30 @@ func enrichTrackMetadata(ctx context.Context, sp *spclient.Spclient, uris []stri
 				continue
 			}
 
-			artist := ""
-			if artists := track.GetArtist(); len(artists) > 0 {
-				artist = artists[0].GetName()
-			}
-			album := ""
-			coverURL := ""
-			if a := track.GetAlbum(); a != nil {
-				album = a.GetName()
-				if covers := a.GetCover(); len(covers) > 0 {
-					if fid := covers[0].GetFileId(); len(fid) > 0 {
-						coverURL = "https://i.scdn.co/image/" + hex.EncodeToString(fid)
-					}
+			var anames []string
+			for _, a := range track.GetArtist() {
+				if n := a.GetName(); n != "" {
+					anames = append(anames, n)
 				}
 			}
+			artist := strings.Join(anames, ", ")
+			album := ""
+			coverURL := ""
+		if a := track.GetAlbum(); a != nil {
+			album = a.GetName()
+			images := a.GetCover()
+			if len(images) == 0 {
+				if cg := a.GetCoverGroup(); cg != nil {
+					images = cg.GetImage()
+				}
+			}
+			for _, img := range images {
+				if fid := img.GetFileId(); len(fid) > 0 {
+					coverURL = "https://i.scdn.co/image/" + hex.EncodeToString(fid)
+					break
+				}
+			}
+		}
 
 			result[ed.GetEntityUri()] = &trackMetadata{
 				Name:       track.GetName(),
