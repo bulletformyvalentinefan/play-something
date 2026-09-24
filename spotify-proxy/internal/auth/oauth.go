@@ -7,10 +7,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Spotify OAuth - soporta tanto el client_id oficial de go-librespot (ingeniería inversa)
-// como tu propia app de https://developer.spotify.com/dashboard
-// Ver Sonora: crates/music/src/spotify/auth.rs:9 DEFAULT_REDIRECT_URI=http://127.0.0.1:8989/login
-// y librespot oauth_sync.rs - solo 127.0.0.1 whitelisteado para el client oficial.
+// Spotify OAuth con el client_id oficial (loopback 127.0.0.1:8989/login
+// whitelisteado) o app propia de developer.spotify.com.
 const (
 	DefaultClientID = "65b708073fc0480ea92a077233ca87bd" // oficial, NO editable, solo loopback whitelisteado
 	OfficialRedirectURI = "http://127.0.0.1:8989/login" // Sonora usa 8989, librespot 8898, desktop 4388
@@ -56,10 +54,6 @@ func RandomVerifier() string {
 	b := make([]byte, 64)
 	_, _ = rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-func AuthURLWithState(cfg *oauth2.Config, state string) string {
-	return cfg.AuthCodeURL(state, oauth2.AccessTypeOffline)
 }
 
 func AuthURLWithPKCE(cfg *oauth2.Config, state, verifier string) string {

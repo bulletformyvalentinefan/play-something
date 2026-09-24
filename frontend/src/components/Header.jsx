@@ -30,6 +30,9 @@ export default function Header() {
           <NavLink to="/library" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
             biblioteca
           </NavLink>
+          <NavLink to="/profile" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
+            perfil
+          </NavLink>
         </nav>
         <div className="header-actions">
           <button type="button" className="theme-btn" onClick={toggle} aria-label="Cambiar tema">

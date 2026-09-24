@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { spotifySearch } from '../api/spotify'
 import SearchBar from '../components/SearchBar'
 import TrackRow from '../components/TrackRow'
@@ -25,9 +25,11 @@ export default function Home() {
   const [addTrack, setAddTrack] = useState(null)
   const [addedIds, setAddedIds] = useState(() => new Set())
   const { recentlyPlayed } = usePlayer()
+  const searchSeq = useRef(0)
 
   const onSearch = async (q) => {
     const term = q.trim()
+    const seq = ++searchSeq.current
     if (!term) {
       setResults(null)
       setQuery('')
@@ -39,14 +41,16 @@ export default function Home() {
     setQuery(term)
     try {
       const data = await spotifySearch(term)
+      if (seq !== searchSeq.current) return
       // Spotify Web API: { tracks: { items: [...] } }
       const items = data?.tracks?.items ?? data?.items ?? []
       setResults(items.map(toRow))
     } catch (err) {
+      if (seq !== searchSeq.current) return
       setError(err.message)
       setResults(null)
     } finally {
-      setBusy(false)
+      if (seq === searchSeq.current) setBusy(false)
     }
   }
 

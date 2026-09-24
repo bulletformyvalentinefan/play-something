@@ -1,11 +1,14 @@
-// Test unitario: abre pestaña Spotify premium y guarda token
-// Uso: cd frontend && node test-login.mjs  (o pnpm test:login)
-// Requiere Go en http://127.0.0.1:8081 (go run ./cmd/server desde spotify-proxy)
+// Test manual: abre pestaña Spotify premium y guarda token
+// Uso: cd frontend && pnpm test:login  (o node scripts/test-login.mjs)
+// GO_URL: backend a usar (default http://127.0.0.1:8081, compose: :3210)
 import { exec } from 'child_process'
 import { setTimeout as sleep } from 'timers/promises'
 import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-const GO = 'http://127.0.0.1:8081'
+const GO = process.env.GO_URL || 'http://127.0.0.1:8081'
+const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.spotify-token')
 
 async function getToken() {
   console.log('Pidiendo URL de login a Go...')
@@ -33,6 +36,6 @@ async function getToken() {
 
 const token = await getToken()
 console.log(`\nToken: ${token.slice(0, 30)}... (len ${token.length})`)
-fs.writeFileSync('.spotify-token', token)
-console.log('Guardado en frontend/.spotify-token')
+fs.writeFileSync(OUT, token)
+console.log('Guardado en frontend/.spotify-token (ignorado por git, solo tests)')
 console.log('Listo: tu token premium está guardado SOLO para tests')

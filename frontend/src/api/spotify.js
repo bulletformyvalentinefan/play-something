@@ -25,14 +25,6 @@ export const getSpotifyMe = (userId) => {
   })
 }
 
-export const getSpotifyToken = (userId) => {
-  const qs = userId ? `?userId=${encodeURIComponent(userId)}` : ''
-  return fetch(`/api/v1/spotify/auth/token${qs}`).then(async (r) => {
-    if (!r.ok) throw new Error('not linked')
-    return r.json()
-  })
-}
-
 export const logoutSpotify = (userId) => {
   const qs = userId ? `?userId=${encodeURIComponent(userId)}` : ''
   return fetch(`/api/v1/spotify/auth/logout${qs}`, { method: 'POST' }).then((r) => r.json())
@@ -47,46 +39,70 @@ const checkOk = async (r) => {
   return r.json()
 }
 
-export const spotifyMe = () => fetch(`/api/v1/spotify/proxy/me`, { headers: authHeader() }).then(checkOk)
-
 export const spotifyPlaylists = (limit = 20, offset = 0) =>
   fetch(`/api/v1/spotify/proxy/me/playlists?limit=${limit}&offset=${offset}`, { headers: authHeader() }).then(checkOk)
 
 export const spotifySearch = (q, type = 'track', limit = 20) =>
   fetch(`/api/v1/spotify/proxy/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`, {
     headers: authHeader(),
-  }).then(async (r) => {
-    if (r.status === 429) {
-      const ra = parseInt(r.headers.get('Retry-After') || '25', 10)
-      // Sonora usa spclient.wg.spotify.com que no tiene este límite; Web API sí — esperamos Retry-After y reintentamos una vez
-      await new Promise((res) => setTimeout(res, Math.min(ra, 10) * 1000))
-      const r2 = await fetch(`/api/v1/spotify/proxy/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`, {
-        headers: authHeader(),
-      })
-      if (r2.status === 429) {
-        const ra2 = r2.headers.get('Retry-After') || '30'
-        throw new Error(`Spotify rate limit — reintenta en ${ra2}s (spclient de Sonora evita esto; prueba término más específico)`)
-      }
-      if (!r2.ok) throw new Error(await r2.text().then((t) => t || `Error ${r2.status}`))
-      return r2.json()
-    }
-    if (!r.ok) {
-      const t = await r.text()
-      throw new Error(t || `Error ${r.status}`)
-    }
+  }).then(checkOk)
+
+// Playback en tu dispositivo Spotify (Connect). Se usa cuando el track no
+// trae preview_url (spclient no devuelve previews). Requiere Premium y la
+// app de Spotify abierta en algún dispositivo.
+export const spotifyPlayerState = () =>
+  fetch(`/api/v1/spotify/player/status`, { headers: authHeader() }).then(async (r) => {
+    if (r.status === 204) return null
+    if (!r.ok) throw new Error(await r.text().then((t) => t || `Error ${r.status}`))
     return r.json()
   })
 
-export const spotifyPlayerStatus = () =>
-  fetch(`/api/v1/spotify/player/status`, { headers: authHeader() }).then((r) => r.json())
+const playResult = async (r) => {
+  const text = await r.text()
+  let body = null
+  try {
+    body = text ? JSON.parse(text) : null
+  } catch {
+    /* respuesta sin JSON (204/404 de Spotify) */
+  }
+  return { ok: r.ok, status: r.status, retryAfter: r.headers.get('Retry-After'), body }
+}
 
-export const spotifyPlay = (body, deviceId) => {
-  const qs = deviceId ? `?device_id=${deviceId}` : ''
+export const spotifyPlayUris = (uris, deviceId) => {
+  const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ''
   return fetch(`/api/v1/spotify/player/play${qs}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
-    body: JSON.stringify(body),
-  }).then((r) => ({ ok: r.ok, status: r.status }))
+    body: JSON.stringify({ uris }),
+  }).then(playResult)
+}
+
+export const spotifyResume = () =>
+  fetch(`/api/v1/spotify/player/play`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({}),
+  }).then(playResult)
+
+export const spotifyPausePlayback = () =>
+  fetch(`/api/v1/spotify/player/pause`, {
+    method: 'PUT',
+    headers: authHeader(),
+  }).then(playResult)
+
+export const spotifySeekTo = (ms) =>
+  fetch(`/api/v1/spotify/player/seek?position_ms=${Math.round(ms)}`, {
+    method: 'PUT',
+    headers: authHeader(),
+  }).then(playResult)
+
+// URL de audio completo vía nuestro backend (spclient + audio key con tu
+// token Premium). El <audio> no manda headers, así que el token va en query.
+export const trackStreamUrl = (track) => {
+  const t = getToken()
+  const uri = track.spotifyUri || (track.id ? `spotify:track:${track.id}` : null)
+  if (!t || !uri) return null
+  return `/api/v1/spotify/proxy/stream?uri=${encodeURIComponent(uri)}&access_token=${encodeURIComponent(t)}`
 }
 
 // Playlists CRUD via token — sin BDD, todo en Spotify con tu token
@@ -134,6 +150,3 @@ export const deleteSpotifyPlaylist = (id) =>
     if (!r.ok) throw new Error(await r.text())
     return r.json()
   })
-
-export const getSpotifyTrack = (id) =>
-  fetch(`/api/v1/spotify/proxy/tracks/${encodeURIComponent(id)}`, { headers: authHeader() }).then((r) => r.json())

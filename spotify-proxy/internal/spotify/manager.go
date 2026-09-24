@@ -3,9 +3,10 @@ package spotify
 import (
 	"context"
 	"log"
+	"net/http"
 	"sync"
+	"time"
 
-	"github.com/devgianlu/go-librespot/spclient"
 	"golang.org/x/oauth2"
 )
 
@@ -17,9 +18,8 @@ type Manager struct {
 }
 
 type spclientSession struct {
-	sp    *spclient.Spclient
+	sess  *SpSession
 	token string
-	clean func()
 }
 
 type Profile struct {
@@ -64,7 +64,7 @@ func (m *Manager) Delete(userID string) {
 	delete(m.tokens, userID)
 	delete(m.profiles, userID)
 	if s, ok := m.sessions[userID]; ok {
-		s.clean()
+		s.sess.Close()
 		delete(m.sessions, userID)
 	}
 }
@@ -73,7 +73,7 @@ func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, s := range m.sessions {
-		s.clean()
+		s.sess.Close()
 	}
 	m.tokens = make(map[string]*oauth2.Token)
 	m.profiles = make(map[string]Profile)
@@ -89,16 +89,6 @@ func (m *Manager) First() (string, *oauth2.Token, bool) {
 	return "", nil, false
 }
 
-func (m *Manager) List() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	ids := make([]string, 0, len(m.tokens))
-	for id := range m.tokens {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
 func (m *Manager) FindUserByToken(token string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -110,16 +100,34 @@ func (m *Manager) FindUserByToken(token string) (string, bool) {
 	return "", false
 }
 
-func (m *Manager) getOrCreateSpclient(ctx context.Context, userID, accessToken string) (*spclient.Spclient, func(), error) {
+// Warmup crea la sesión spclient en background para que la primera búsqueda
+// no pague el costo de conexión (~3s). Se llama tras el login OAuth.
+func (m *Manager) Warmup(userID string) {
+	tok, ok := m.GetToken(userID)
+	if !ok {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		owner := userID
+		if id, found := m.FindUserByToken(tok.AccessToken); found {
+			owner = id
+		}
+		_, _ = m.getOrCreateSpclient(ctx, owner, tok.AccessToken)
+	}()
+}
+
+func (m *Manager) getOrCreateSpclient(ctx context.Context, userID, accessToken string) (*SpSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if s, ok := m.sessions[userID]; ok && s.token == accessToken {
-		return s.sp, func() {}, nil
+		return s.sess, nil
 	}
 
 	if s, ok := m.sessions[userID]; ok {
-		s.clean()
+		s.sess.Close()
 		delete(m.sessions, userID)
 	}
 
@@ -129,14 +137,14 @@ func (m *Manager) getOrCreateSpclient(ctx context.Context, userID, accessToken s
 		username = userID
 	}
 
-	sp, cleanup, err := NewSpclientSession(ctx, username, accessToken)
+	sess, err := NewSpclientSession(ctx, username, accessToken)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	m.sessions[userID] = &spclientSession{sp: sp, token: accessToken, clean: cleanup}
+	m.sessions[userID] = &spclientSession{sess: sess, token: accessToken}
 	log.Printf("[manager] spclient session created for %s", userID)
-	return sp, func() {}, nil
+	return sess, nil
 }
 
 type SearchResult struct {
@@ -149,38 +157,51 @@ type SearchResult struct {
 	URI        string `json:"uri"`
 }
 
-func (m *Manager) Search(ctx context.Context, userID, query string) ([]SearchResult, error) {
+func (m *Manager) Search(ctx context.Context, userID, query string, limit int) ([]SearchResult, error) {
 	tok, ok := m.GetToken(userID)
 	if !ok {
-		if _, t, ok := m.First(); ok {
-			tok = t
-		} else {
+		var t *oauth2.Token
+		if userID, t, ok = m.First(); !ok {
 			return nil, ErrNotLinked
 		}
+		tok = t
 	}
-	sp, _, err := m.getOrCreateSpclient(ctx, userID, tok.AccessToken)
+	// Key the cached session by the token owner, not the requested userID,
+	// so a fallback token never gets stored under the wrong user.
+	if owner, found := m.FindUserByToken(tok.AccessToken); found {
+		userID = owner
+	}
+	sess, err := m.getOrCreateSpclient(ctx, userID, tok.AccessToken)
 	if err != nil {
 		return nil, err
 	}
-	if res, err := searchSpclient(ctx, sp, query); err == nil && len(res) > 0 {
-		return res, nil
-	}
-	return webAPISearch(ctx, tok.AccessToken, query)
+	return searchSpclient(ctx, sess.Sp, query, limit)
 }
 
-func (m *Manager) SearchWithToken(ctx context.Context, token, query string) ([]SearchResult, error) {
+func (m *Manager) SearchWithToken(ctx context.Context, token, query string, limit int) ([]SearchResult, error) {
 	username, _ := m.FindUserByToken(token)
 	if username == "" {
 		username = "spotify-user"
 	}
-	sp, _, err := m.getOrCreateSpclient(ctx, username, token)
+	sess, err := m.getOrCreateSpclient(ctx, username, token)
 	if err != nil {
-		return webAPISearch(ctx, token, query)
+		return nil, err
 	}
-	if res, err := searchSpclient(ctx, sp, query); err == nil && len(res) > 0 {
-		return res, nil
+	return searchSpclient(ctx, sess.Sp, query, limit)
+}
+
+// StreamTrack vuelca el audio completo del track (desencriptado con la key
+// pedida con el token Premium) como respuesta HTTP con soporte de Range.
+func (m *Manager) StreamTrack(ctx context.Context, token, uri string, w http.ResponseWriter, r *http.Request) error {
+	username, _ := m.FindUserByToken(token)
+	if username == "" {
+		username = "spotify-user"
 	}
-	return webAPISearch(ctx, token, query)
+	sess, err := m.getOrCreateSpclient(ctx, username, token)
+	if err != nil {
+		return err
+	}
+	return streamTrack(ctx, sess, uri, w, r)
 }
 
 var ErrNotLinked = errNotLinked("not linked")

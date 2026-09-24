@@ -1,6 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
-
-const DEBOUNCE_MS = 400
+import { useEffect, useState } from 'react'
 
 export default function SearchBar({ onSearch, query }) {
   const [q, setQ] = useState(query ?? '')
@@ -9,23 +7,17 @@ export default function SearchBar({ onSearch, query }) {
     if (query !== undefined && query !== q) setQ(query)
   }, [query])
 
-  const timerRef = useRef(null)
-
-  useEffect(() => () => clearTimeout(timerRef.current), [])
-
   const handleChange = (value) => {
     setQ(value)
-    clearTimeout(timerRef.current)
-    if (!value.trim()) {
+    if (value.trim().length < 2) {
       onSearch('')
       return
     }
-    timerRef.current = setTimeout(() => onSearch(value), DEBOUNCE_MS)
+    onSearch(value)
   }
 
   const submit = (e) => {
     e.preventDefault()
-    clearTimeout(timerRef.current)
     onSearch(q)
   }
 

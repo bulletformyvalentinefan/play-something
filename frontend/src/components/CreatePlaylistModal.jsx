@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createSpotifyPlaylist } from '../api/spotify'
 import Modal from './Modal'
 
-export default function CreatePlaylistModal({ user, onClose, onCreated }) {
+export default function CreatePlaylistModal({ onClose, onCreated }) {
   const [titulo, setTitulo] = useState('')
   const [descripcion, setDescripcion] = useState('')
   const [esPublica, setEsPublica] = useState(true)

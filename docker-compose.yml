@@ -26,16 +26,19 @@ services:
     restart: unless-stopped
 
   spotify-proxy:
+    build: ./spotify-proxy
     image: ghcr.io/bulletformyvalentinefan/play-something/backend:latest
     container_name: spotify-proxy
     ports:
       - "3210:8081"
-      - "3211:8989"
+      # OAuth loopback: Spotify solo acepta 127.0.0.1:8989/login con el
+      # client oficial, el host DEBE exponer el 8989 tal cual.
+      - "8989:8989"
     environment:
       PORT: 8081
       REDIS_ADDR: redis:6379
       FRONTEND_ORIGIN: http://localhost:3200
-      OAUTH_CALLBACK_URL: http://127.0.0.1:3211/login
+      OAUTH_CALLBACK_URL: http://127.0.0.1:8989/login
       SPOTIFY_CLIENT_ID: "65b708073fc0480ea92a077233ca87bd"
       SPOTIFY_DEVICE_NAME: play-something
       SPOTIFY_CACHE_DIR: /data/cache
@@ -58,6 +61,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    build: ./frontend
     image: ghcr.io/bulletformyvalentinefan/play-something/frontend:latest
     container_name: spotify-frontend
     ports:

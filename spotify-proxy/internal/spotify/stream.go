@@ -1,0 +1,312 @@
+package spotify
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/devgianlu/go-librespot/audio"
+	storagepb "github.com/devgianlu/go-librespot/proto/spotify/download"
+	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
+)
+
+// streamCacheTTL: las URLs del CDN expiran, así que la entrada vive poco.
+// La key de audio y el archivo elegido no cambian, pero se recachean juntos.
+const streamCacheTTL = 5 * time.Minute
+
+type streamCacheEntry struct {
+	contentType string
+	key         []byte
+	cdnURL      string
+	size        int64
+	trackName   string
+	expiry      time.Time
+}
+
+var (
+	streamCacheMu sync.Mutex
+	streamCache   = make(map[string]*streamCacheEntry)
+)
+
+func getStreamCache(uri string) (*streamCacheEntry, bool) {
+	streamCacheMu.Lock()
+	defer streamCacheMu.Unlock()
+	e, ok := streamCache[uri]
+	if !ok || time.Now().After(e.expiry) {
+		if ok {
+			delete(streamCache, uri)
+		}
+		return nil, false
+	}
+	return e, true
+}
+
+func setStreamCache(uri string, e *streamCacheEntry) {
+	streamCacheMu.Lock()
+	defer streamCacheMu.Unlock()
+	if len(streamCache) > 500 {
+		for k, v := range streamCache {
+			if time.Now().After(v.expiry) {
+				delete(streamCache, k)
+			}
+		}
+	}
+	e.expiry = time.Now().Add(streamCacheTTL)
+	streamCache[uri] = e
+}
+
+// preferredAudioOrder prioriza OGG Vorbis (lo reproduce el browser nativo)
+// y evita MP3_160_ENC (variante encriptada distinta).
+var preferredAudioOrder = []metadatapb.AudioFile_Format{
+	metadatapb.AudioFile_OGG_VORBIS_160,
+	metadatapb.AudioFile_OGG_VORBIS_96,
+	metadatapb.AudioFile_MP3_160,
+	metadatapb.AudioFile_MP3_256,
+	metadatapb.AudioFile_MP3_96,
+	metadatapb.AudioFile_OGG_VORBIS_320,
+	metadatapb.AudioFile_MP3_320,
+}
+
+func pickAudioFile(track *metadatapb.Track) *metadatapb.AudioFile {
+	byFormat := make(map[metadatapb.AudioFile_Format]*metadatapb.AudioFile, len(track.GetFile()))
+	for _, f := range track.GetFile() {
+		if f.GetFileId() == nil {
+			continue
+		}
+		if _, ok := byFormat[f.GetFormat()]; !ok {
+			byFormat[f.GetFormat()] = f
+		}
+	}
+	for _, want := range preferredAudioOrder {
+		if f, ok := byFormat[want]; ok {
+			return f
+		}
+	}
+	return nil
+}
+
+func audioContentType(f *metadatapb.AudioFile) string {
+	switch f.GetFormat() {
+	case metadatapb.AudioFile_OGG_VORBIS_96,
+		metadatapb.AudioFile_OGG_VORBIS_160,
+		metadatapb.AudioFile_OGG_VORBIS_320:
+		return "audio/ogg"
+	default:
+		return "audio/mpeg"
+	}
+}
+
+// cdnReaderAt lee por rangos un archivo del CDN de Spotify.
+type cdnReaderAt struct {
+	client *http.Client
+	url    string
+	size   int64
+}
+
+func (c *cdnReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off >= c.size {
+		return 0, io.EOF
+	}
+	end := off + int64(len(p)) - 1
+	if end >= c.size {
+		end = c.size - 1
+	}
+	req, err := http.NewRequest("GET", c.url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, end))
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("cdn status %d", resp.StatusCode)
+	}
+	n, err := io.ReadFull(resp.Body, p[:end-off+1])
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		err = nil
+	}
+	return n, err
+}
+
+// decryptSeeker adapta el Decryptor (ReaderAt) a ReadSeeker para ServeContent.
+// base desplaza el origen (para saltear la página de metadata de Spotify).
+type decryptSeeker struct {
+	dec  *audio.Decryptor
+	base int64
+	size int64
+	pos  int64
+}
+
+func (s *decryptSeeker) Read(p []byte) (int, error) {
+	if s.pos >= s.size {
+		return 0, io.EOF
+	}
+	n, err := s.dec.ReadAt(p, s.base+s.pos)
+	s.pos += int64(n)
+	return n, err
+}
+
+func (s *decryptSeeker) Seek(offset int64, whence int) (int64, error) {
+	var abs int64
+	switch whence {
+	case io.SeekStart:
+		abs = offset
+	case io.SeekCurrent:
+		abs = s.pos + offset
+	case io.SeekEnd:
+		abs = s.size + offset
+	default:
+		return 0, fmt.Errorf("whence inválido")
+	}
+	if abs < 0 {
+		return 0, fmt.Errorf("offset negativo")
+	}
+	s.pos = abs
+	return abs, nil
+}
+
+// streamTrack vuelca el audio completo del track: metadata → mejor archivo →
+// audio key (con el token Premium) → URL del CDN → decrypt AES → HTTP Range.
+// La resolución (todo menos los bytes) se cachea por URI para arranque veloz.
+func streamTrack(ctx context.Context, sess *SpSession, uri string, w http.ResponseWriter, r *http.Request) error {
+	if !strings.HasPrefix(uri, "spotify:track:") {
+		return fmt.Errorf("uri inválida")
+	}
+
+	var entry *streamCacheEntry
+	if e, ok := getStreamCache(uri); ok {
+		entry = e
+	} else {
+		track, err := fetchTrack(ctx, sess, uri)
+		if err != nil {
+			return err
+		}
+		file := pickAudioFile(track)
+		if file == nil {
+			return fmt.Errorf("sin archivo de audio disponible")
+		}
+
+		key, err := sess.Keys.Request(ctx, track.GetGid(), file.GetFileId())
+		if err != nil {
+			return fmt.Errorf("audio key: %w", err)
+		}
+
+		format := file.GetFormat()
+		storage, err := sess.Sp.ResolveStorageInteractive(ctx, file.GetFileId(), &format, false)
+		if err != nil {
+			return fmt.Errorf("storage resolve: %w", err)
+		}
+		if storage.GetResult() != storagepb.StorageResolveResponse_CDN || len(storage.GetCdnurl()) == 0 {
+			return fmt.Errorf("storage no disponible: %v", storage.GetResult())
+		}
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		size, err := cdnSize(client, storage.GetCdnurl()[0])
+		if err != nil {
+			return fmt.Errorf("cdn size: %w", err)
+		}
+
+		entry = &streamCacheEntry{
+			contentType: audioContentType(file),
+			key:         key,
+			cdnURL:      storage.GetCdnurl()[0],
+			size:        size,
+			trackName:   track.GetName(),
+		}
+		setStreamCache(uri, entry)
+	}
+
+	cdn := &cdnReaderAt{client: &http.Client{Timeout: 30 * time.Second}, url: entry.cdnURL, size: entry.size}
+	dec, err := audio.NewAesAudioDecryptor(cdn, entry.key)
+	if err != nil {
+		return fmt.Errorf("decryptor: %w", err)
+	}
+
+	// Los OGG de Spotify arrancan con una página de metadata propietaria
+	// (paquete 0x81) que los browsers no entienden: se saltea para servir
+	// un Ogg Vorbis limpio desde el header de identificación.
+	var base int64
+	if strings.HasPrefix(entry.contentType, "audio/ogg") {
+		if skip, serr := oggMetadataPageLen(dec); serr == nil {
+			base = skip
+		} else {
+			return fmt.Errorf("ogg metadata page: %w", serr)
+		}
+	}
+
+	w.Header().Set("Content-Type", entry.contentType)
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, entry.trackName+".ogg", time.Now(), &decryptSeeker{dec: dec, base: base, size: entry.size - base})
+	return nil
+}
+
+// oggMetadataPageLen devuelve el largo de la primera página Ogg si es la de
+// metadata de Spotify (primer paquete 0x81), o 0 si el stream ya es limpio.
+func oggMetadataPageLen(dec *audio.Decryptor) (int64, error) {
+	section := io.NewSectionReader(dec, 0, 512)
+	var hdr [27]byte
+	if _, err := io.ReadFull(section, hdr[:]); err != nil {
+		return 0, err
+	}
+	if string(hdr[0:4]) != "OggS" {
+		return 0, fmt.Errorf("no es un stream Ogg")
+	}
+	nseg := int(hdr[26])
+	table := make([]byte, nseg)
+	if _, err := io.ReadFull(section, table); err != nil {
+		return 0, err
+	}
+	var bodyLen int64
+	for _, s := range table {
+		bodyLen += int64(s)
+	}
+	if nseg > 0 && table[nseg-1] == 255 {
+		return 0, fmt.Errorf("paquete de metadata continúa en la página siguiente")
+	}
+	var first [1]byte
+	if _, err := dec.ReadAt(first[:], 27+int64(nseg)); err != nil {
+		return 0, err
+	}
+	if first[0] != 0x81 {
+		return 0, nil
+	}
+	return 27 + int64(nseg) + bodyLen, nil
+}
+
+func cdnSize(client *http.Client, url string) (int64, error) {
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.ContentLength > 0 {
+		return resp.ContentLength, nil
+	}
+	// Fallback: primer byte para leer el total del Content-Range
+	req2, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req2.Header.Set("Range", "bytes=0-0")
+	resp2, err := client.Do(req2)
+	if err != nil {
+		return 0, err
+	}
+	defer resp2.Body.Close()
+	var start, end, size int64
+	if _, err := fmt.Sscanf(resp2.Header.Get("Content-Range"), "bytes %d-%d/%d", &start, &end, &size); err != nil {
+		return 0, fmt.Errorf("sin Content-Range")
+	}
+	return size, nil
+}

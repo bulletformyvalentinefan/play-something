@@ -21,7 +21,6 @@ func (h *PlayerHandler) Routes(r chi.Router) {
 	r.Post("/prev", h.Prev)
 	r.Put("/seek", h.Seek)
 	r.Put("/volume", h.Volume)
-	r.Get("/events", h.Events)
 	// compat POST
 	r.Post("/play", h.Play)
 	r.Post("/pause", h.Pause)
@@ -29,19 +28,26 @@ func (h *PlayerHandler) Routes(r chi.Router) {
 	r.Post("/volume", h.Volume)
 }
 
-func (h *PlayerHandler) Status(w http.ResponseWriter, r *http.Request) {
+func (h *PlayerHandler) requireToken(w http.ResponseWriter, r *http.Request) (string, bool) {
 	token := resolveBearer(r)
 	if token == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+		return "", false
+	}
+	return token, true
+}
+
+func (h *PlayerHandler) Status(w http.ResponseWriter, r *http.Request) {
+	token, ok := h.requireToken(w, r)
+	if !ok {
 		return
 	}
 	h.proxyPlayer(w, r, http.MethodGet, "https://api.spotify.com/v1/me/player", nil, token)
 }
 
 func (h *PlayerHandler) Play(w http.ResponseWriter, r *http.Request) {
-	token := resolveBearer(r)
-	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+	token, ok := h.requireToken(w, r)
+	if !ok {
 		return
 	}
 	body, _ := io.ReadAll(r.Body)
@@ -54,9 +60,8 @@ func (h *PlayerHandler) Play(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PlayerHandler) Pause(w http.ResponseWriter, r *http.Request) {
-	token := resolveBearer(r)
-	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+	token, ok := h.requireToken(w, r)
+	if !ok {
 		return
 	}
 	deviceID := r.URL.Query().Get("device_id")
@@ -68,27 +73,24 @@ func (h *PlayerHandler) Pause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PlayerHandler) Next(w http.ResponseWriter, r *http.Request) {
-	token := resolveBearer(r)
-	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+	token, ok := h.requireToken(w, r)
+	if !ok {
 		return
 	}
 	h.proxyPlayer(w, r, http.MethodPost, "https://api.spotify.com/v1/me/player/next", nil, token)
 }
 
 func (h *PlayerHandler) Prev(w http.ResponseWriter, r *http.Request) {
-	token := resolveBearer(r)
-	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+	token, ok := h.requireToken(w, r)
+	if !ok {
 		return
 	}
 	h.proxyPlayer(w, r, http.MethodPost, "https://api.spotify.com/v1/me/player/previous", nil, token)
 }
 
 func (h *PlayerHandler) Seek(w http.ResponseWriter, r *http.Request) {
-	token := resolveBearer(r)
-	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+	token, ok := h.requireToken(w, r)
+	if !ok {
 		return
 	}
 	pos := r.URL.Query().Get("position_ms")
@@ -100,9 +102,8 @@ func (h *PlayerHandler) Seek(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PlayerHandler) Volume(w http.ResponseWriter, r *http.Request) {
-	token := resolveBearer(r)
-	if token == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+	token, ok := h.requireToken(w, r)
+	if !ok {
 		return
 	}
 	vol := r.URL.Query().Get("volume_percent")
@@ -111,13 +112,6 @@ func (h *PlayerHandler) Volume(w http.ResponseWriter, r *http.Request) {
 	}
 	u := "https://api.spotify.com/v1/me/player/volume?volume_percent=" + url.QueryEscape(vol)
 	h.proxyPlayer(w, r, http.MethodPut, u, nil, token)
-}
-
-func (h *PlayerHandler) Events(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	_, _ = w.Write([]byte("event: hint\ndata: spclient dealer WS en linux via librespot\n\n"))
 }
 
 func (h *PlayerHandler) proxyPlayer(w http.ResponseWriter, r *http.Request, method, target string, body []byte, token string) {
