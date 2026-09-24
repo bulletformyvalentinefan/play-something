@@ -68,21 +68,53 @@ func (h *ProxyHandler) Me(w http.ResponseWriter, r *http.Request) {
 	h.forward(w, r, "/v1/me", nil)
 }
 
+func playlistSummaryJSON(s spotify.PlaylistSummary) map[string]any {
+	images := []any{}
+	if s.CoverURL != "" {
+		images = append(images, map[string]string{"url": s.CoverURL})
+	}
+	return map[string]any{
+		"id":          s.ID,
+		"name":        s.Name,
+		"description": s.Description,
+		"public":      s.Public,
+		"images":      images,
+		"tracks":      map[string]any{"total": s.Total},
+		"uri":         s.URI,
+	}
+}
+
+func trackJSON(t spotify.SearchResult) map[string]any {
+	images := []any{}
+	if t.AlbumCover != "" {
+		images = append(images, map[string]string{"url": t.AlbumCover})
+	}
+	return map[string]any{
+		"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "preview_url": nil,
+		"artists": []map[string]string{{"name": t.Artist}},
+		"album":   map[string]any{"name": t.Album, "images": images},
+	}
+}
+
 func (h *ProxyHandler) MePlaylists(w http.ResponseWriter, r *http.Request) {
 	token := resolveBearer(r)
 	if token == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
 		return
 	}
-	q := url.Values{}
+	limit, offset := 20, 0
 	if v := r.URL.Query().Get("limit"); v != "" {
-		q.Set("limit", v)
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
 	}
 	if v := r.URL.Query().Get("offset"); v != "" {
-		q.Set("offset", v)
+		if n, err := strconv.Atoi(v); err == nil {
+			offset = n
+		}
 	}
 
-	key := token + "|" + q.Encode()
+	key := token + "|" + strconv.Itoa(limit) + "|" + strconv.Itoa(offset)
 	h.plMu.Lock()
 	if e, ok := h.plCache[key]; ok && time.Now().Before(e.expiry) {
 		body, status, contentType := e.body, e.status, e.contentType
@@ -94,34 +126,25 @@ func (h *ProxyHandler) MePlaylists(w http.ResponseWriter, r *http.Request) {
 	}
 	h.plMu.Unlock()
 
-	u := h.apiBase + "/v1/me/playlists"
-	if len(q) > 0 {
-		u += "?" + q.Encode()
+	if h.mgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "sin manager"})
+		return
 	}
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	lists, total, err := h.mgr.UserPlaylists(r.Context(), token, limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/json"
+	items := make([]any, 0, len(lists))
+	for _, s := range lists {
+		items = append(items, playlistSummaryJSON(s))
 	}
-	if resp.StatusCode == http.StatusOK {
-		h.plMu.Lock()
-		h.plCache[key] = &playlistListEntry{body: body, status: resp.StatusCode, contentType: contentType, expiry: time.Now().Add(playlistListTTL)}
-		h.plMu.Unlock()
-	}
-	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		w.Header().Set("Retry-After", ra)
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.WriteHeader(resp.StatusCode)
+	body, _ := json.Marshal(map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
+	h.plMu.Lock()
+	h.plCache[key] = &playlistListEntry{body: body, status: http.StatusOK, contentType: "application/json", expiry: time.Now().Add(playlistListTTL)}
+	h.plMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }
 
@@ -160,8 +183,37 @@ func (h *ProxyHandler) CreatePlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProxyHandler) Playlist(w http.ResponseWriter, r *http.Request) {
+	token := resolveBearer(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+		return
+	}
+	if h.mgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "sin manager"})
+		return
+	}
 	id := chi.URLParam(r, "id")
-	h.forward(w, r, "/v1/playlists/"+id, nil)
+	full, err := h.mgr.PlaylistDetail(r.Context(), token, id, 100, 0)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	items := make([]any, 0, len(full.Tracks))
+	for _, t := range full.Tracks {
+		items = append(items, map[string]any{"track": trackJSON(t)})
+	}
+	s := full.PlaylistSummary
+	images := []any{}
+	if s.CoverURL != "" {
+		images = append(images, map[string]string{"url": s.CoverURL})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": s.ID, "name": s.Name, "description": s.Description, "public": s.Public,
+		"images": images, "uri": s.URI,
+		"owner":     map[string]any{"display_name": s.Owner},
+		"followers": map[string]any{"total": 0},
+		"tracks":    map[string]any{"items": items, "total": s.Total},
+	})
 }
 
 func (h *ProxyHandler) UpdatePlaylist(w http.ResponseWriter, r *http.Request) {
@@ -179,10 +231,39 @@ func (h *ProxyHandler) DeletePlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProxyHandler) PlaylistTracks(w http.ResponseWriter, r *http.Request) {
+	token := resolveBearer(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+		return
+	}
+	if h.mgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "sin manager"})
+		return
+	}
+	limit, offset := 100, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			offset = n
+		}
+	}
 	id := chi.URLParam(r, "id")
-	q := r.URL.Query()
-	q.Del("userId")
-	h.forward(w, r, "/v1/playlists/"+id+"/tracks", q)
+	full, err := h.mgr.PlaylistDetail(r.Context(), token, id, limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	items := make([]any, 0, len(full.Tracks))
+	for _, t := range full.Tracks {
+		items = append(items, map[string]any{"track": trackJSON(t)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items, "total": full.Total, "limit": limit, "offset": offset,
+	})
 }
 
 func (h *ProxyHandler) AddTrack(w http.ResponseWriter, r *http.Request) {

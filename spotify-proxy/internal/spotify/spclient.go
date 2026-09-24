@@ -31,9 +31,10 @@ import (
 // de keys de audio. Replica session.NewSessionFromOptions sin importar los
 // paquetes "session" ni "player" (decoders con CGO).
 type SpSession struct {
-	Sp    *spclient.Spclient
-	Keys  *audio.KeyProvider
-	clean func()
+	Sp       *spclient.Spclient
+	Keys     *audio.KeyProvider
+	Username string
+	clean    func()
 }
 
 // Close libera la conexión AP.
@@ -91,9 +92,10 @@ func NewSpclientSession(ctx context.Context, username, token string) (*SpSession
 	}
 
 	return &SpSession{
-		Sp:    sp,
-		Keys:  audio.NewAudioKeyProvider(log, accesspoint),
-		clean: cleanup,
+		Sp:       sp,
+		Keys:     audio.NewAudioKeyProvider(log, accesspoint),
+		Username: accesspoint.Username(),
+		clean:    cleanup,
 	}, nil
 }
 
@@ -166,8 +168,10 @@ func searchSpclient(ctx context.Context, sp *spclient.Spclient, query string, li
 		return nil, nil
 	}
 
-	enriched := enrichTrackMetadata(ctx, sp, uris)
+	return buildTrackResults(uris, enrichTrackMetadata(ctx, sp, uris)), nil
+}
 
+func buildTrackResults(uris []string, enriched map[string]*trackMetadata) []SearchResult {
 	results := make([]SearchResult, 0, len(uris))
 	for _, uri := range uris {
 		id := strings.TrimPrefix(uri, "spotify:track:")
@@ -187,7 +191,7 @@ func searchSpclient(ctx context.Context, sp *spclient.Spclient, query string, li
 		}
 		results = append(results, r)
 	}
-	return results, nil
+	return results
 }
 
 type trackMetadata struct {
@@ -227,8 +231,20 @@ func fetchTrack(ctx context.Context, sess *SpSession, uri string) (*metadatapb.T
 }
 
 func enrichTrackMetadata(ctx context.Context, sp *spclient.Spclient, uris []string) map[string]*trackMetadata {
+	result := make(map[string]*trackMetadata, len(uris))
+	for start := 0; start < len(uris); start += 50 {
+		end := start + 50
+		if end > len(uris) {
+			end = len(uris)
+		}
+		enrichTrackBatch(ctx, sp, uris[start:end], result)
+	}
+	return result
+}
+
+func enrichTrackBatch(ctx context.Context, sp *spclient.Spclient, uris []string, result map[string]*trackMetadata) {
 	if len(uris) == 0 {
-		return nil
+		return
 	}
 
 	entityRequests := make([]*extmetadatapb.EntityRequest, len(uris))
@@ -245,10 +261,9 @@ func enrichTrackMetadata(ctx context.Context, sp *spclient.Spclient, uris []stri
 		EntityRequest: entityRequests,
 	})
 	if err != nil {
-		return nil
+		return
 	}
 
-	result := make(map[string]*trackMetadata, len(uris))
 	for _, arr := range resp.GetExtendedMetadata() {
 		for _, ed := range arr.GetExtensionData() {
 			if ed.GetExtensionData() == nil {
@@ -293,7 +308,6 @@ func enrichTrackMetadata(ctx context.Context, sp *spclient.Spclient, uris []stri
 			}
 		}
 	}
-	return result
 }
 
 func escapeQuery(q string) string {
