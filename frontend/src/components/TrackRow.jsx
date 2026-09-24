@@ -2,16 +2,6 @@ import { usePlayer } from '../context/PlayerContext'
 import { formatDuration } from '../utils/format'
 import { PlayIcon, PauseIcon } from './icons'
 
-function Equalizer() {
-  return (
-    <span className="eq" aria-hidden="true">
-      <span />
-      <span />
-      <span />
-    </span>
-  )
-}
-
 export default function TrackRow({ track, isAdded, isBusy, onAdd, onRemove }) {
   const { current, isPlaying, play } = usePlayer()
   const isCurrent = current?.id === track.id
@@ -20,7 +10,7 @@ export default function TrackRow({ track, isAdded, isBusy, onAdd, onRemove }) {
   return (
     <article className="row">
       <div className="row-meta">
-        {playing ? <Equalizer /> : <span className="year">{formatDuration(track.duration)}</span>}
+        <span className="year">{formatDuration(track.duration)}</span>
       </div>
       <div className="row-content">
         <div className="track-main">
@@ -30,23 +20,14 @@ export default function TrackRow({ track, isAdded, isBusy, onAdd, onRemove }) {
             <span className="cover placeholder" aria-hidden="true" />
           )}
           <div className="row-text">
-            <h3 className="row-title">
-              {track.explicit && (
-                <>
-                  <span className="explicit-badge" title="Explícito">
-                    E
-                  </span>{' '}
-                </>
-              )}
-              {track.title}
-            </h3>
+            <h3 className="row-title">{track.title}</h3>
             <p className="row-desc">{track.artistName}</p>
           </div>
         </div>
         <div className="row-actions">
           <button
             type="button"
-            className="play-btn"
+            className="icon-btn"
             onClick={() => play(track)}
             aria-label={playing ? 'Pausar' : 'Reproducir'}
           >
