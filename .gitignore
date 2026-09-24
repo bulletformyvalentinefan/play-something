@@ -1,7 +1,11 @@
 ### Go ###
 spotify-proxy/spotify-proxy
 spotify-proxy/spotify-proxy.exe
+spotify-proxy/server.exe
 spotify-proxy/*.log
+
+### Secrets locales (tokens de test) ###
+frontend/.spotify-token
 
 ### Node / pnpm ###
 node_modules/
