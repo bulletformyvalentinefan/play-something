@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/spotify"
@@ -17,10 +19,33 @@ import (
 type ProxyHandler struct {
 	apiBase string
 	mgr     *spotify.Manager
+
+	plMu    sync.Mutex
+	plCache map[string]*playlistListEntry
+}
+
+// playlistListTTL: el listado se cachea poco para no quemar rate limit de Web API.
+const playlistListTTL = 60 * time.Second
+
+type playlistListEntry struct {
+	body        []byte
+	status      int
+	contentType string
+	expiry      time.Time
 }
 
 func NewProxyHandlerWithManager(mgr *spotify.Manager) *ProxyHandler {
-	return &ProxyHandler{apiBase: "https://api.spotify.com", mgr: mgr}
+	return &ProxyHandler{apiBase: "https://api.spotify.com", mgr: mgr, plCache: make(map[string]*playlistListEntry)}
+}
+
+func (h *ProxyHandler) invalidatePlaylists(token string) {
+	h.plMu.Lock()
+	defer h.plMu.Unlock()
+	for k := range h.plCache {
+		if strings.HasPrefix(k, token+"|") {
+			delete(h.plCache, k)
+		}
+	}
 }
 
 func (h *ProxyHandler) Routes(r chi.Router) {
@@ -44,6 +69,11 @@ func (h *ProxyHandler) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProxyHandler) MePlaylists(w http.ResponseWriter, r *http.Request) {
+	token := resolveBearer(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+		return
+	}
 	q := url.Values{}
 	if v := r.URL.Query().Get("limit"); v != "" {
 		q.Set("limit", v)
@@ -51,29 +81,82 @@ func (h *ProxyHandler) MePlaylists(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("offset"); v != "" {
 		q.Set("offset", v)
 	}
-	h.forward(w, r, "/v1/me/playlists", q)
+
+	key := token + "|" + q.Encode()
+	h.plMu.Lock()
+	if e, ok := h.plCache[key]; ok && time.Now().Before(e.expiry) {
+		body, status, contentType := e.body, e.status, e.contentType
+		h.plMu.Unlock()
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(status)
+		_, _ = w.Write(body)
+		return
+	}
+	h.plMu.Unlock()
+
+	u := h.apiBase + "/v1/me/playlists"
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	if resp.StatusCode == http.StatusOK {
+		h.plMu.Lock()
+		h.plCache[key] = &playlistListEntry{body: body, status: resp.StatusCode, contentType: contentType, expiry: time.Now().Add(playlistListTTL)}
+		h.plMu.Unlock()
+	}
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		w.Header().Set("Retry-After", ra)
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
 }
 
 func (h *ProxyHandler) CreatePlaylist(w http.ResponseWriter, r *http.Request) {
-	// POST /v1/me/playlists no existe en Spotify — necesitamos /v1/users/{user_id}/playlists
-	// Obtenemos user_id via /v1/me con el mismo token
+	// POST /v1/me/playlists no existe en Spotify — necesitamos /v1/users/{user_id}/playlists.
+	// El user_id sale del perfil guardado al loguearse, sin gastar un /v1/me extra.
 	token := resolveBearer(r)
 	if token == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no autorizado"})
 		return
 	}
-	meReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, h.apiBase+"/v1/me", nil)
-	meReq.Header.Set("Authorization", "Bearer "+token)
-	meResp, err := http.DefaultClient.Do(meReq)
-	if err != nil || meResp.StatusCode != 200 {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "no se pudo obtener perfil para crear playlist"})
-		return
+	userID := ""
+	if h.mgr != nil {
+		if owner, found := h.mgr.FindUserByToken(token); found {
+			if p, ok := h.mgr.GetProfile(owner); ok && p.ID != "" {
+				userID = p.ID
+			}
+		}
 	}
-	defer meResp.Body.Close()
-	var me struct{ ID string `json:"id"` }
-	_ = json.NewDecoder(meResp.Body).Decode(&me)
+	if userID == "" {
+		meReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, h.apiBase+"/v1/me", nil)
+		meReq.Header.Set("Authorization", "Bearer "+token)
+		meResp, err := http.DefaultClient.Do(meReq)
+		if err != nil || meResp.StatusCode != 200 {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "no se pudo obtener perfil para crear playlist"})
+			return
+		}
+		defer meResp.Body.Close()
+		var me struct{ ID string `json:"id"` }
+		_ = json.NewDecoder(meResp.Body).Decode(&me)
+		userID = me.ID
+	}
 	body, _ := io.ReadAll(r.Body)
-	h.forwardWithBody(w, r, "/v1/users/"+me.ID+"/playlists", nil, body)
+	h.forwardWithBody(w, r, "/v1/users/"+userID+"/playlists", nil, body)
+	h.invalidatePlaylists(token)
 }
 
 func (h *ProxyHandler) Playlist(w http.ResponseWriter, r *http.Request) {
@@ -85,12 +168,14 @@ func (h *ProxyHandler) UpdatePlaylist(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	body, _ := io.ReadAll(r.Body)
 	h.forwardWithBody(w, r, "/v1/playlists/"+id, nil, body)
+	h.invalidatePlaylists(resolveBearer(r))
 }
 
 func (h *ProxyHandler) DeletePlaylist(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	// Spotify usa DELETE /v1/playlists/{id}/followers para unfollow
 	h.forwardWithMethod(w, r, "/v1/playlists/"+id+"/followers", nil, nil, http.MethodDelete)
+	h.invalidatePlaylists(resolveBearer(r))
 }
 
 func (h *ProxyHandler) PlaylistTracks(w http.ResponseWriter, r *http.Request) {
@@ -105,12 +190,14 @@ func (h *ProxyHandler) AddTrack(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	// Spotify espera { uris: ["spotify:track:..."] } y opcional position
 	h.forwardWithBody(w, r, "/v1/playlists/"+id+"/tracks", nil, body)
+	h.invalidatePlaylists(resolveBearer(r))
 }
 
 func (h *ProxyHandler) RemoveTrack(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	body, _ := io.ReadAll(r.Body)
 	h.forwardWithBodyAndMethod(w, r, "/v1/playlists/"+id+"/tracks", nil, body, http.MethodDelete)
+	h.invalidatePlaylists(resolveBearer(r))
 }
 
 func (h *ProxyHandler) Search(w http.ResponseWriter, r *http.Request) {

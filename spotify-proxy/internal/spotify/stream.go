@@ -6,12 +6,58 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devgianlu/go-librespot/audio"
 	storagepb "github.com/devgianlu/go-librespot/proto/spotify/download"
 	metadatapb "github.com/devgianlu/go-librespot/proto/spotify/metadata"
 )
+
+// streamCacheTTL: las URLs del CDN expiran, así que la entrada vive poco.
+// La key de audio y el archivo elegido no cambian, pero se recachean juntos.
+const streamCacheTTL = 5 * time.Minute
+
+type streamCacheEntry struct {
+	contentType string
+	key         []byte
+	cdnURL      string
+	size        int64
+	trackName   string
+	expiry      time.Time
+}
+
+var (
+	streamCacheMu sync.Mutex
+	streamCache   = make(map[string]*streamCacheEntry)
+)
+
+func getStreamCache(uri string) (*streamCacheEntry, bool) {
+	streamCacheMu.Lock()
+	defer streamCacheMu.Unlock()
+	e, ok := streamCache[uri]
+	if !ok || time.Now().After(e.expiry) {
+		if ok {
+			delete(streamCache, uri)
+		}
+		return nil, false
+	}
+	return e, true
+}
+
+func setStreamCache(uri string, e *streamCacheEntry) {
+	streamCacheMu.Lock()
+	defer streamCacheMu.Unlock()
+	if len(streamCache) > 500 {
+		for k, v := range streamCache {
+			if time.Now().After(v.expiry) {
+				delete(streamCache, k)
+			}
+		}
+	}
+	e.expiry = time.Now().Add(streamCacheTTL)
+	streamCache[uri] = e
+}
 
 // preferredAudioOrder prioriza OGG Vorbis (lo reproduce el browser nativo)
 // y evita MP3_160_ENC (variante encriptada distinta).
@@ -128,42 +174,57 @@ func (s *decryptSeeker) Seek(offset int64, whence int) (int64, error) {
 
 // streamTrack vuelca el audio completo del track: metadata → mejor archivo →
 // audio key (con el token Premium) → URL del CDN → decrypt AES → HTTP Range.
+// La resolución (todo menos los bytes) se cachea por URI para arranque veloz.
 func streamTrack(ctx context.Context, sess *SpSession, uri string, w http.ResponseWriter, r *http.Request) error {
 	if !strings.HasPrefix(uri, "spotify:track:") {
 		return fmt.Errorf("uri inválida")
 	}
 
-	track, err := fetchTrack(ctx, sess, uri)
-	if err != nil {
-		return err
-	}
-	file := pickAudioFile(track)
-	if file == nil {
-		return fmt.Errorf("sin archivo de audio disponible")
+	var entry *streamCacheEntry
+	if e, ok := getStreamCache(uri); ok {
+		entry = e
+	} else {
+		track, err := fetchTrack(ctx, sess, uri)
+		if err != nil {
+			return err
+		}
+		file := pickAudioFile(track)
+		if file == nil {
+			return fmt.Errorf("sin archivo de audio disponible")
+		}
+
+		key, err := sess.Keys.Request(ctx, track.GetGid(), file.GetFileId())
+		if err != nil {
+			return fmt.Errorf("audio key: %w", err)
+		}
+
+		format := file.GetFormat()
+		storage, err := sess.Sp.ResolveStorageInteractive(ctx, file.GetFileId(), &format, false)
+		if err != nil {
+			return fmt.Errorf("storage resolve: %w", err)
+		}
+		if storage.GetResult() != storagepb.StorageResolveResponse_CDN || len(storage.GetCdnurl()) == 0 {
+			return fmt.Errorf("storage no disponible: %v", storage.GetResult())
+		}
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		size, err := cdnSize(client, storage.GetCdnurl()[0])
+		if err != nil {
+			return fmt.Errorf("cdn size: %w", err)
+		}
+
+		entry = &streamCacheEntry{
+			contentType: audioContentType(file),
+			key:         key,
+			cdnURL:      storage.GetCdnurl()[0],
+			size:        size,
+			trackName:   track.GetName(),
+		}
+		setStreamCache(uri, entry)
 	}
 
-	key, err := sess.Keys.Request(ctx, track.GetGid(), file.GetFileId())
-	if err != nil {
-		return fmt.Errorf("audio key: %w", err)
-	}
-
-	format := file.GetFormat()
-	storage, err := sess.Sp.ResolveStorageInteractive(ctx, file.GetFileId(), &format, false)
-	if err != nil {
-		return fmt.Errorf("storage resolve: %w", err)
-	}
-	if storage.GetResult() != storagepb.StorageResolveResponse_CDN || len(storage.GetCdnurl()) == 0 {
-		return fmt.Errorf("storage no disponible: %v", storage.GetResult())
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	cdn := &cdnReaderAt{client: client, url: storage.GetCdnurl()[0]}
-	cdn.size, err = cdnSize(client, cdn.url)
-	if err != nil {
-		return fmt.Errorf("cdn size: %w", err)
-	}
-
-	dec, err := audio.NewAesAudioDecryptor(cdn, key)
+	cdn := &cdnReaderAt{client: &http.Client{Timeout: 30 * time.Second}, url: entry.cdnURL, size: entry.size}
+	dec, err := audio.NewAesAudioDecryptor(cdn, entry.key)
 	if err != nil {
 		return fmt.Errorf("decryptor: %w", err)
 	}
@@ -172,7 +233,7 @@ func streamTrack(ctx context.Context, sess *SpSession, uri string, w http.Respon
 	// (paquete 0x81) que los browsers no entienden: se saltea para servir
 	// un Ogg Vorbis limpio desde el header de identificación.
 	var base int64
-	if strings.HasPrefix(string(audioContentType(file)), "audio/ogg") {
+	if strings.HasPrefix(entry.contentType, "audio/ogg") {
 		if skip, serr := oggMetadataPageLen(dec); serr == nil {
 			base = skip
 		} else {
@@ -180,9 +241,9 @@ func streamTrack(ctx context.Context, sess *SpSession, uri string, w http.Respon
 		}
 	}
 
-	w.Header().Set("Content-Type", audioContentType(file))
+	w.Header().Set("Content-Type", entry.contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
-	http.ServeContent(w, r, track.GetName()+".ogg", time.Now(), &decryptSeeker{dec: dec, base: base, size: cdn.size - base})
+	http.ServeContent(w, r, entry.trackName+".ogg", time.Now(), &decryptSeeker{dec: dec, base: base, size: entry.size - base})
 	return nil
 }
 
