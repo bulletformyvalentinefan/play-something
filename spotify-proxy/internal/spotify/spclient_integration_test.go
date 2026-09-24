@@ -125,45 +125,25 @@ func loginPremiumToken(t *testing.T) (*oauth2.Token, string) {
 		t.Fatalf("token exchange failed: %v", err)
 	}
 	t.Logf("access_token obtained (expires: %s)", token.Expiry.Format(time.RFC3339))
-
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", "https://api.spotify.com/v1/me", nil)
-	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("profile fetch failed: %v", err)
-	}
-	defer resp.Body.Close()
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	t.Logf("Profile response %d: %s", resp.StatusCode, string(bodyBytes))
-	var profile struct {
-		ID          string `json:"id"`
-		DisplayName string `json:"display_name"`
-		Product     string `json:"product"`
-	}
-	_ = json.Unmarshal(bodyBytes, &profile)
-	t.Logf("User: %s (%s) — Product: %s", profile.ID, profile.DisplayName, profile.Product)
-	if profile.Product != "premium" {
-		t.Logf("WARNING: not Premium (%s) — playback may not work", profile.Product)
-	}
-
-	username := profile.ID
-	if username == "" {
-		username = "spotify-user"
-		t.Logf("WARNING: profile.ID empty (Web API rate limit?) — using fallback username %q", username)
-	}
-	return token, username
+	// Sin Web API: el username real sale del AP tras conectar, no de /v1/me.
+	return token, ""
 }
 
 func TestSpclientLogin(t *testing.T) {
-	token, username := loginPremiumToken(t)
+	token, _ := loginPremiumToken(t)
 
 	t.Logf("--- RAW context-resolve dump ---")
-	rawSess, err := NewSpclientSession(context.Background(), username, token.AccessToken)
+	rawSess, err := NewSpclientSession(context.Background(), "spotify-user", token.AccessToken)
 	if err != nil {
 		t.Fatalf("raw spclient session failed: %v", err)
 	}
 	defer rawSess.Close()
 	rawSp := rawSess.Sp
+	username := rawSess.Username
+	if username == "" {
+		username = "spotify-user"
+	}
+	t.Logf("username AP: %q", username)
 
 	rawResp, err := rawSp.Request(context.Background(), "GET", "/context-resolve/v1/spotify:search:pierce+the+veil", nil, nil, nil)
 	if err != nil {
@@ -385,9 +365,9 @@ func openBrowser(url string) error {
 // TestPlaylistProbe sondea endpoints de playlists vía spclient con el token
 // Premium. Solo diagnostica (logs); no falla salvo error de transporte.
 func TestPlaylistProbe(t *testing.T) {
-	token, username := loginPremiumToken(t)
+	token, _ := loginPremiumToken(t)
 
-	sess, err := NewSpclientSession(context.Background(), username, token.AccessToken)
+	sess, err := NewSpclientSession(context.Background(), "spotify-user", token.AccessToken)
 	if err != nil {
 		t.Fatalf("session failed: %v", err)
 	}
@@ -409,7 +389,7 @@ func TestPlaylistProbe(t *testing.T) {
 		t.Logf("PROBE %s %s: status=%d ct=%q len=%d body=%q", method, path, resp.StatusCode, resp.Header.Get("Content-Type"), len(b), snip)
 	}
 
-	t.Logf("PROBE: username AP=%q profile=%q", sess.Username, username)
+	t.Logf("PROBE: username AP=%q", sess.Username)
 	if sess.Username != "" {
 		probe("GET", "/playlist/v2/user/"+sess.Username+"/rootlist", nil)
 	} else {
