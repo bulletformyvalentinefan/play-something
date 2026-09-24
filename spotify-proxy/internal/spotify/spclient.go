@@ -130,6 +130,9 @@ func searchSpclient(ctx context.Context, sp *spclient.Spclient, query string, li
 	if limit > MaxSearchLimit {
 		limit = MaxSearchLimit
 	}
+	if sp == nil {
+		return nil, fmt.Errorf("spclient nil")
+	}
 
 	uri := "spotify:search:" + escapeQuery(query)
 	resp, err := sp.Request(ctx, "GET", fmt.Sprintf("/context-resolve/v1/%s", uri), nil, nil, nil)
@@ -283,21 +286,21 @@ func enrichTrackBatch(ctx context.Context, sp *spclient.Spclient, uris []string,
 			artist := strings.Join(anames, ", ")
 			album := ""
 			coverURL := ""
-		if a := track.GetAlbum(); a != nil {
-			album = a.GetName()
-			images := a.GetCover()
-			if len(images) == 0 {
-				if cg := a.GetCoverGroup(); cg != nil {
-					images = cg.GetImage()
+			if a := track.GetAlbum(); a != nil {
+				album = a.GetName()
+				images := a.GetCover()
+				if len(images) == 0 {
+					if cg := a.GetCoverGroup(); cg != nil {
+						images = cg.GetImage()
+					}
+				}
+				for _, img := range images {
+					if fid := img.GetFileId(); len(fid) > 0 {
+						coverURL = "https://i.scdn.co/image/" + hex.EncodeToString(fid)
+						break
+					}
 				}
 			}
-			for _, img := range images {
-				if fid := img.GetFileId(); len(fid) > 0 {
-					coverURL = "https://i.scdn.co/image/" + hex.EncodeToString(fid)
-					break
-				}
-			}
-		}
 
 			result[ed.GetEntityUri()] = &trackMetadata{
 				Name:       track.GetName(),
