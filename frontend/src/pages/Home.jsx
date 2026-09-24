@@ -3,6 +3,7 @@ import { spotifySearch } from '../api/spotify'
 import SearchBar from '../components/SearchBar'
 import TrackRow from '../components/TrackRow'
 import AddToPlaylistModal from '../components/AddToPlaylistModal'
+import { PlayIcon, PauseIcon } from '../components/icons'
 import { usePlayer } from '../context/PlayerContext'
 
 function toRow(t) {
@@ -14,7 +15,35 @@ function toRow(t) {
     duration: Math.round((t.duration_ms || 0) / 1000),
     previewUrl: t.preview_url,
     spotifyUri: t.uri,
+    explicit: !!t.explicit,
   }
+}
+
+function HeroCard({ track, onAdd, isAdded }) {
+  const { play, current, isPlaying } = usePlayer()
+  const playing = current?.id === track.id && isPlaying
+  return (
+    <article className="hero-card">
+      {track.albumCover ? (
+        <img className="hero-art" src={track.albumCover} alt="" />
+      ) : (
+        <span className="hero-art placeholder" aria-hidden="true" />
+      )}
+      <div className="hero-body">
+        <span className="hero-kicker">destacado</span>
+        <h2 className="hero-title">{track.title}</h2>
+        <p className="hero-artist">{track.artistName}</p>
+        <div className="row-actions">
+          <button type="button" className="play-btn" onClick={() => play(track)} aria-label="Reproducir destacado">
+            {playing ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <button type="button" className="theme-btn" onClick={() => onAdd(track)} disabled={isAdded}>
+            {isAdded ? 'agregada' : 'agregar'}
+          </button>
+        </div>
+      </div>
+    </article>
+  )
 }
 
 export default function Home() {
@@ -81,7 +110,10 @@ export default function Home() {
         <section className="section">
           <h2 className="section-title">resultados · {query}</h2>
           {results.length === 0 && <p className="muted">sin resultados.</p>}
-          {results.map((t) => (
+          {results.length > 0 && (
+            <HeroCard track={results[0]} onAdd={() => setAddTrack(results[0])} isAdded={addedIds.has(results[0].id)} />
+          )}
+          {results.slice(1).map((t) => (
             <TrackRow key={t.id} track={t} isAdded={addedIds.has(t.id)} onAdd={() => setAddTrack(t)} />
           ))}
         </section>
