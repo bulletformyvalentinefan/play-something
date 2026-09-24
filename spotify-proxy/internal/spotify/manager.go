@@ -89,16 +89,6 @@ func (m *Manager) First() (string, *oauth2.Token, bool) {
 	return "", nil, false
 }
 
-func (m *Manager) List() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	ids := make([]string, 0, len(m.tokens))
-	for id := range m.tokens {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
 func (m *Manager) FindUserByToken(token string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

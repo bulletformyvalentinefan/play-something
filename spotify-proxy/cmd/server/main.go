@@ -34,9 +34,7 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok","service":"spotify-proxy","mode":"sonora-go-librespot"}`))
 	})
 
-	// Sonora-style: Session go-librespot (client_id 65b... solo handshake, todo via spclient)
 	mgr := spotify.NewManager()
-	_ = mgr // placeholder para evitar unused si no se usa aún en stub Windows
 	authH := handler.NewAuthHandler(cfg, mgr)
 	proxyH := handler.NewProxyHandlerWithManager(mgr)
 	playerH := handler.NewPlayerHandler()

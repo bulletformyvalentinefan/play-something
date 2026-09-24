@@ -128,46 +128,37 @@ func searchSpclient(ctx context.Context, sp *spclient.Spclient, query string, li
 		return nil, fmt.Errorf("decode context: %w", err)
 	}
 
-	type trackEntry struct {
-		uri string
-		idx int
-	}
-	var entries []trackEntry
+	var uris []string
 	for _, page := range cctx.Pages {
 		for _, tr := range page.Tracks {
 			if tr.Uri == "" || !strings.HasPrefix(tr.Uri, "spotify:track:") {
 				continue
 			}
-			entries = append(entries, trackEntry{uri: tr.Uri})
-			if len(entries) >= limit {
+			uris = append(uris, tr.Uri)
+			if len(uris) >= limit {
 				break
 			}
 		}
-		if len(entries) >= limit {
+		if len(uris) >= limit {
 			break
 		}
 	}
 
-	if len(entries) == 0 {
+	if len(uris) == 0 {
 		return nil, nil
-	}
-
-	uris := make([]string, len(entries))
-	for i, e := range entries {
-		uris[i] = e.uri
 	}
 
 	enriched := enrichTrackMetadata(ctx, sp, uris)
 
-	results := make([]SearchResult, 0, len(entries))
-	for _, e := range entries {
-		id := strings.TrimPrefix(e.uri, "spotify:track:")
+	results := make([]SearchResult, 0, len(uris))
+	for _, uri := range uris {
+		id := strings.TrimPrefix(uri, "spotify:track:")
 		r := SearchResult{
 			ID:  id,
 			Name: id,
-			URI: e.uri,
+			URI: uri,
 		}
-		if info, ok := enriched[e.uri]; ok {
+		if info, ok := enriched[uri]; ok {
 			if info.Name != "" {
 				r.Name = info.Name
 			}

@@ -1,46 +1,21 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
-	"sync"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/spotify"
 )
 
-// cache Sonora-style: sin Redis, solo memoria 30s para búsquedas (evita 429 Web API)
-type cacheEntry struct {
-	body   []byte
-	status int
-	header http.Header
-	expiry time.Time
-}
-
-var (
-	searchCache   = make(map[string]cacheEntry)
-	searchCacheMu sync.RWMutex
-)
-
-func cacheKey(path string, q url.Values) string {
-	if q == nil {
-		return path
-	}
-	return path + "?" + q.Encode()
-}
-
-// ProxyHandler Sonora-style: Web API solo como fallback, primario es Session spclient como Sonora.
+// ProxyHandler reenvía a Web API con el token del usuario; la búsqueda va por spclient.
 type ProxyHandler struct {
 	apiBase string
 	mgr     *spotify.Manager
-}
-
-func NewProxyHandler() *ProxyHandler {
-	return &ProxyHandler{apiBase: "https://api.spotify.com"}
 }
 
 func NewProxyHandlerWithManager(mgr *spotify.Manager) *ProxyHandler {
@@ -203,7 +178,7 @@ func (h *ProxyHandler) forwardWithMethod(w http.ResponseWriter, r *http.Request,
 	}
 	var bodyReader io.Reader
 	if body != nil {
-		bodyReader = bytesReader(body)
+		bodyReader = bytes.NewReader(body)
 	}
 	req, _ := http.NewRequestWithContext(r.Context(), method, u, bodyReader)
 	if body != nil {
@@ -228,41 +203,12 @@ func (h *ProxyHandler) forwardWithMethod(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	b, _ := io.ReadAll(resp.Body)
-	// cache solo búsquedas exitosas 200 por 30s (Sonora usa spclient.get_context sin este límite Web API)
-	if path == "/v1/search" && resp.StatusCode == http.StatusOK {
-		searchCacheMu.Lock()
-		hcopy := make(http.Header)
-		for k, vs := range resp.Header {
-			hcopy[k] = append([]string(nil), vs...)
-		}
-		searchCache[keyForCache(path, q)] = cacheEntry{body: b, status: resp.StatusCode, header: hcopy, expiry: time.Now().Add(30 * time.Second)}
-		searchCacheMu.Unlock()
-	}
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
 		w.Header().Set("Retry-After", ra)
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(b)
-}
-
-func keyForCache(path string, q url.Values) string { return cacheKey(path, q) }
-
-func bytesReader(b []byte) io.Reader {
-	if b == nil {
-		return nil
-	}
-	return &bytesReaderImpl{b: b}
-}
-
-type bytesReaderImpl struct{ b []byte; off int }
-func (r *bytesReaderImpl) Read(p []byte) (int, error) {
-	if r.off >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.off:])
-	r.off += n
-	return n, nil
 }
 
 func resolveBearer(r *http.Request) string {
@@ -275,13 +221,5 @@ func resolveBearer(r *http.Request) string {
 	if t := r.URL.Query().Get("access_token"); t != "" {
 		return t
 	}
-	// compat: frontend viejo mandaba ?userId, pero ya no guardamos BDD
-	// si solo hay userId sin token, no podemos resolver -> pide header
 	return ""
-}
-
-func writeJSONProxy(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
 }
