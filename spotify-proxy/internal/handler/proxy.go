@@ -11,15 +11,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/spotify"
+	"github.com/go-chi/chi/v5"
 )
 
 // ProxyHandler reenvía a Web API con el token del usuario; la búsqueda va por spclient.
 type ProxyHandler struct {
 	apiBase string
 	mgr     *spotify.Manager
-
 	plMu    sync.Mutex
 	plCache map[string]*playlistListEntry
 }
@@ -90,7 +89,7 @@ func trackJSON(t spotify.SearchResult) map[string]any {
 		images = append(images, map[string]string{"url": t.AlbumCover})
 	}
 	return map[string]any{
-		"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "preview_url": nil,
+		"id": t.ID, "name": t.Name, "uri": t.URI, "duration_ms": t.DurationMs, "explicit": t.Explicit, "preview_url": nil,
 		"artists": []map[string]string{{"name": t.Artist}},
 		"album":   map[string]any{"name": t.Album, "images": images},
 	}
@@ -173,7 +172,9 @@ func (h *ProxyHandler) CreatePlaylist(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer meResp.Body.Close()
-		var me struct{ ID string `json:"id"` }
+		var me struct {
+			ID string `json:"id"`
+		}
 		_ = json.NewDecoder(meResp.Body).Decode(&me)
 		userID = me.ID
 	}
@@ -339,7 +340,6 @@ func (h *ProxyHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
-
 
 func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request, path string, q url.Values) {
 	h.forwardWithMethod(w, r, path, q, nil, http.MethodGet)
