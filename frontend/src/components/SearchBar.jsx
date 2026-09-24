@@ -16,7 +16,7 @@ export default function SearchBar({ onSearch, query }) {
   const handleChange = (value) => {
     setQ(value)
     clearTimeout(timerRef.current)
-    if (!value.trim()) {
+    if (value.trim().length < 2) {
       onSearch('')
       return
     }

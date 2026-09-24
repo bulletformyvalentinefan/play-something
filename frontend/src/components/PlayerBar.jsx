@@ -4,7 +4,7 @@ import { formatDuration } from '../utils/format'
 import { PlayIcon, PauseIcon } from './icons'
 
 export default function PlayerBar() {
-  const { current, isPlaying, progress, duration, toggle, seek } = usePlayer()
+  const { current, isPlaying, progress, duration, toggle, seek, playError } = usePlayer()
   const [dragging, setDragging] = useState(false)
   const [dragValue, setDragValue] = useState(null)
 
@@ -43,6 +43,7 @@ export default function PlayerBar() {
         <div className="player-info">
           <span className="player-title">{current.title}</span>
           <span className="player-artist">{current.artistName}</span>
+          {playError && <span className="player-error">{playError}</span>}
         </div>
         <div className="player-progress">
           <span className="mono-small">{formatDuration(shown)}</span>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getSpotifyPlaylist, getSpotifyPlaylistTracks, addSpotifyTrack, removeSpotifyTrack, deleteSpotifyPlaylist } from '../api/spotify'
 import { spotifySearch } from '../api/spotify'
@@ -31,6 +31,7 @@ export default function PlaylistDetail() {
   const [addedIds, setAddedIds] = useState(() => new Set())
   const [showDelete, setShowDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const searchSeq = useRef(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -75,18 +76,21 @@ export default function PlaylistDetail() {
       setError(null)
       return
     }
+    const seq = ++searchSeq.current
     setSearching(true)
     setQuery(q)
     setError(null)
     try {
       const data = await spotifySearch(q)
+      if (seq !== searchSeq.current) return
       const items = data?.tracks?.items ?? []
       setResults(items.map(toRow))
     } catch (e) {
+      if (seq !== searchSeq.current) return
       setError(e.message)
       setResults(null)
     } finally {
-      setSearching(false)
+      if (seq === searchSeq.current) setSearching(false)
     }
   }
 

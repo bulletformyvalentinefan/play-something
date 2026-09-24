@@ -47,6 +47,55 @@ export const spotifySearch = (q, type = 'track', limit = 20) =>
     headers: authHeader(),
   }).then(checkOk)
 
+// Playback en tu dispositivo Spotify (Connect). Se usa cuando el track no
+// trae preview_url (spclient no devuelve previews). Requiere Premium y la
+// app de Spotify abierta en algún dispositivo.
+export const spotifyPlayerState = () =>
+  fetch(`/api/v1/spotify/player/status`, { headers: authHeader() }).then(async (r) => {
+    if (r.status === 204) return null
+    if (!r.ok) throw new Error(await r.text().then((t) => t || `Error ${r.status}`))
+    return r.json()
+  })
+
+const playResult = async (r) => {
+  const text = await r.text()
+  let body = null
+  try {
+    body = text ? JSON.parse(text) : null
+  } catch {
+    /* respuesta sin JSON (204/404 de Spotify) */
+  }
+  return { ok: r.ok, status: r.status, body }
+}
+
+export const spotifyPlayUris = (uris, deviceId) => {
+  const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ''
+  return fetch(`/api/v1/spotify/player/play${qs}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({ uris }),
+  }).then(playResult)
+}
+
+export const spotifyResume = () =>
+  fetch(`/api/v1/spotify/player/play`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify({}),
+  }).then(playResult)
+
+export const spotifyPausePlayback = () =>
+  fetch(`/api/v1/spotify/player/pause`, {
+    method: 'PUT',
+    headers: authHeader(),
+  }).then(playResult)
+
+export const spotifySeekTo = (ms) =>
+  fetch(`/api/v1/spotify/player/seek?position_ms=${Math.round(ms)}`, {
+    method: 'PUT',
+    headers: authHeader(),
+  }).then(playResult)
+
 // Playlists CRUD via token — sin BDD, todo en Spotify con tu token
 export const createSpotifyPlaylist = (name, description, isPublic) =>
   fetch(`/api/v1/spotify/proxy/me/playlists`, {
