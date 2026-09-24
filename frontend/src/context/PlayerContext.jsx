@@ -5,6 +5,7 @@ import {
   spotifyResume,
   spotifyPausePlayback,
   spotifySeekTo,
+  trackStreamUrl,
 } from '../api/spotify'
 import { useRecentlyPlayed } from '../hooks/useRecentlyPlayed'
 
@@ -97,6 +98,42 @@ export function PlayerProvider({ children }) {
     }
   }
 
+  const errHandlerRef = useRef(null)
+
+  // Reproduce un src local; si falla, ejecuta fallback una sola vez
+  const playAudio = (track, src, fallback) => {
+    const audio = audioRef.current
+    if (errHandlerRef.current) {
+      audio.removeEventListener('error', errHandlerRef.current)
+      errHandlerRef.current = null
+    }
+    setRemote(false)
+    setCurrent(track)
+    setProgress(0)
+    setDuration(track.duration || 0)
+    audio.src = src
+    if (fallback) {
+      const onErr = () => {
+        audio.removeEventListener('error', onErr)
+        errHandlerRef.current = null
+        fallback()
+      }
+      errHandlerRef.current = onErr
+      audio.addEventListener('error', onErr)
+    }
+    audio.play().catch(() => setIsPlaying(false))
+    setIsPlaying(true)
+    addRecent(track)
+  }
+
+  const playConnectFallback = (track) => {
+    if (track.previewUrl) {
+      playAudio(track, track.previewUrl, () => void playRemote(track))
+    } else {
+      void playRemote(track)
+    }
+  }
+
   const play = (track) => {
     const isSame = current && current.id === track.id
     if (isSame) {
@@ -104,19 +141,13 @@ export function PlayerProvider({ children }) {
       return
     }
     setPlayError(null)
-    if (track.previewUrl) {
-      const audio = audioRef.current
-      setRemote(false)
-      setCurrent(track)
-      setProgress(0)
-      setDuration(0)
-      audio.src = track.previewUrl
-      audio.play().catch(() => setIsPlaying(false))
-      setIsPlaying(true)
-      addRecent(track)
+    // 1. Audio completo vía backend (spclient + tu token Premium)
+    const stream = trackStreamUrl(track)
+    if (stream) {
+      playAudio(track, stream, () => playConnectFallback(track))
       return
     }
-    void playRemote(track)
+    playConnectFallback(track)
   }
 
   const toggle = () => {

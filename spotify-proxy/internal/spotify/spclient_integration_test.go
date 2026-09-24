@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"crypto/rand"
 	"encoding/base64"
@@ -148,11 +149,12 @@ func TestSpclientLogin(t *testing.T) {
 	}
 
 	t.Logf("--- RAW context-resolve dump ---")
-	rawSp, rawCleanup, err := NewSpclientSession(context.Background(), username, token.AccessToken)
+	rawSess, err := NewSpclientSession(context.Background(), username, token.AccessToken)
 	if err != nil {
 		t.Fatalf("raw spclient session failed: %v", err)
 	}
-	defer rawCleanup()
+	defer rawSess.Close()
+	rawSp := rawSess.Sp
 
 	rawResp, err := rawSp.Request(context.Background(), "GET", "/context-resolve/v1/spotify:search:pierce+the+veil", nil, nil, nil)
 	if err != nil {
@@ -287,6 +289,29 @@ func TestSpclientLogin(t *testing.T) {
 	}
 	if withDuration != n {
 		t.Errorf("expected all results with duration > 0, got %d/%d", withDuration, n)
+	}
+
+	t.Logf("--- stream smoke (audio real vía token) ---")
+	streamURI := results[0].URI
+	sreq := httptest.NewRequest("GET", "/stream?uri="+url.QueryEscape(streamURI), nil)
+	sreq.Header.Set("Range", "bytes=0-4095")
+	srec := httptest.NewRecorder()
+	if err := streamTrack(context.Background(), rawSess, streamURI, srec, sreq); err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	res := srec.Result()
+	ct := res.Header.Get("Content-Type")
+	t.Logf("stream: status=%d content-type=%s accept-ranges=%s", res.StatusCode, ct, res.Header.Get("Accept-Ranges"))
+	if ct != "audio/ogg" && ct != "audio/mpeg" {
+		t.Errorf("unexpected stream content-type %q", ct)
+	}
+	if res.StatusCode != http.StatusPartialContent && res.StatusCode != http.StatusOK {
+		t.Errorf("unexpected stream status %d", res.StatusCode)
+	}
+	streamBody, _ := io.ReadAll(res.Body)
+	t.Logf("stream: first bytes=%d", len(streamBody))
+	if len(streamBody) == 0 {
+		t.Errorf("empty stream body")
 	}
 }
 

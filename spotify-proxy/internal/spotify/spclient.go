@@ -14,6 +14,7 @@ import (
 	librespot "github.com/devgianlu/go-librespot"
 	"github.com/devgianlu/go-librespot/ap"
 	"github.com/devgianlu/go-librespot/apresolve"
+	"github.com/devgianlu/go-librespot/audio"
 	"github.com/devgianlu/go-librespot/login5"
 	connectpb "github.com/devgianlu/go-librespot/proto/spotify/connectstate"
 	extmetadatapb "github.com/devgianlu/go-librespot/proto/spotify/extendedmetadata"
@@ -25,11 +26,24 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// NewSpclientSession creates a go-librespot spclient using the user's Spotify
-// Premium access token. This replicates session.NewSessionFromOptions but
-// avoids importing the "session" or "player" packages (which pull in CGO
-// audio decoders). All packages used here are pure Go.
-func NewSpclientSession(ctx context.Context, username, token string) (*spclient.Spclient, func(), error) {
+// SpSession es una sesión spclient pura-Go (sin CGO): conecta el AP con el
+// token Premium del usuario, hace login5 y arma el spclient + el proveedor
+// de keys de audio. Replica session.NewSessionFromOptions sin importar los
+// paquetes "session" ni "player" (decoders con CGO).
+type SpSession struct {
+	Sp    *spclient.Spclient
+	Keys  *audio.KeyProvider
+	clean func()
+}
+
+// Close libera la conexión AP.
+func (s *SpSession) Close() {
+	if s != nil && s.clean != nil {
+		s.clean()
+	}
+}
+
+func NewSpclientSession(ctx context.Context, username, token string) (*SpSession, error) {
 	log := &librespot.NullLogger{}
 	client := &http.Client{Timeout: 30 * time.Second}
 	deviceId := hex.EncodeToString([]byte("playsomething00000"))
@@ -37,7 +51,7 @@ func NewSpclientSession(ctx context.Context, username, token string) (*spclient.
 	// 1. Obtain client token
 	clientToken, err := retrieveClientToken(ctx, client, deviceId)
 	if err != nil {
-		return nil, nil, fmt.Errorf("client token: %w", err)
+		return nil, fmt.Errorf("client token: %w", err)
 	}
 
 	// 2. Resolve endpoints
@@ -46,12 +60,13 @@ func NewSpclientSession(ctx context.Context, username, token string) (*spclient.
 	// 3. Connect to access point with user's OAuth token
 	apAddr, err := resolver.GetAccesspoint(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve accesspoint: %w", err)
+		return nil, fmt.Errorf("resolve accesspoint: %w", err)
 	}
 	accesspoint := ap.NewAccesspoint(log, apAddr, deviceId)
 	if err := accesspoint.ConnectSpotifyToken(ctx, username, token); err != nil {
-		return nil, nil, fmt.Errorf("ap connect: %w", err)
+		return nil, fmt.Errorf("ap connect: %w", err)
 	}
+	cleanup := func() { accesspoint.Close() }
 
 	// 4. Login via login5 (gets internal access token for spclient)
 	l5 := login5.NewLogin5(log, client, deviceId, clientToken)
@@ -59,35 +74,38 @@ func NewSpclientSession(ctx context.Context, username, token string) (*spclient.
 		Username: accesspoint.Username(),
 		Data:     accesspoint.StoredCredentials(),
 	}); err != nil {
-		accesspoint.Close()
-		return nil, nil, fmt.Errorf("login5: %w", err)
+		cleanup()
+		return nil, fmt.Errorf("login5: %w", err)
 	}
 
-	// 5. Create spclient
+	// 5. Create spclient + audio key provider over the same AP
 	spAddr, err := resolver.GetSpclient(ctx)
 	if err != nil {
-		accesspoint.Close()
-		return nil, nil, fmt.Errorf("resolve spclient: %w", err)
+		cleanup()
+		return nil, fmt.Errorf("resolve spclient: %w", err)
 	}
 	sp, err := spclient.NewSpclient(ctx, log, client, spAddr, l5.AccessToken(), deviceId, clientToken)
 	if err != nil {
-		accesspoint.Close()
-		return nil, nil, fmt.Errorf("spclient init: %w", err)
+		cleanup()
+		return nil, fmt.Errorf("spclient init: %w", err)
 	}
 
-	cleanup := func() { accesspoint.Close() }
-	return sp, cleanup, nil
+	return &SpSession{
+		Sp:    sp,
+		Keys:  audio.NewAudioKeyProvider(log, accesspoint),
+		clean: cleanup,
+	}, nil
 }
 
 // SearchViaSpclient creates a fresh spclient session and searches. Used by tests.
 // In production, use searchSpclient with a cached session from the Manager.
 func SearchViaSpclient(ctx context.Context, token, username, query string) ([]SearchResult, error) {
-	sp, cleanup, err := NewSpclientSession(ctx, username, token)
+	sess, err := NewSpclientSession(ctx, username, token)
 	if err != nil {
 		return nil, err
 	}
-	defer cleanup()
-	return searchSpclient(ctx, sp, query, DefaultSearchLimit)
+	defer sess.Close()
+	return searchSpclient(ctx, sess.Sp, query, DefaultSearchLimit)
 }
 
 const (
@@ -178,6 +196,34 @@ type trackMetadata struct {
 	Album      string
 	DurationMs int32
 	CoverURL   string
+}
+
+// fetchTrack trae el proto Track completo de un URI vía ExtendedMetadata.
+func fetchTrack(ctx context.Context, sess *SpSession, uri string) (*metadatapb.Track, error) {
+	resp, err := sess.Sp.ExtendedMetadata(ctx, &extmetadatapb.BatchedEntityRequest{
+		EntityRequest: []*extmetadatapb.EntityRequest{{
+			EntityUri: uri,
+			Query: []*extmetadatapb.ExtensionQuery{{
+				ExtensionKind: extmetadatapb.ExtensionKind_TRACK_V4,
+			}},
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, arr := range resp.GetExtendedMetadata() {
+		for _, ed := range arr.GetExtensionData() {
+			if ed.GetExtensionData() == nil {
+				continue
+			}
+			var track metadatapb.Track
+			if err := ed.GetExtensionData().UnmarshalTo(&track); err != nil {
+				continue
+			}
+			return &track, nil
+		}
+	}
+	return nil, fmt.Errorf("sin metadata para %s", uri)
 }
 
 func enrichTrackMetadata(ctx context.Context, sp *spclient.Spclient, uris []string) map[string]*trackMetadata {

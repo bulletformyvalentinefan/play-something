@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/bulletformyvalentinefan/play-something/spotify-proxy/internal/spotify"
@@ -35,6 +36,7 @@ func (h *ProxyHandler) Routes(r chi.Router) {
 	r.Get("/search", h.Search)
 	r.Get("/tracks/search", h.Search)
 	r.Get("/tracks/{id}", h.Track)
+	r.Get("/stream", h.Stream)
 }
 
 func (h *ProxyHandler) Me(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +152,30 @@ func (h *ProxyHandler) Track(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	h.forward(w, r, "/v1/tracks/"+id, nil)
 }
+
+// Stream vuelca el audio completo del track (desencriptado con el token
+// Premium del usuario). Soporta Range para seek. Requiere Bearer.
+func (h *ProxyHandler) Stream(w http.ResponseWriter, r *http.Request) {
+	token := resolveBearer(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no vinculado"})
+		return
+	}
+	uri := r.URL.Query().Get("uri")
+	if uri == "" || !strings.HasPrefix(uri, "spotify:track:") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "uri requerida (spotify:track:...)"})
+		return
+	}
+	if h.mgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "sin manager"})
+		return
+	}
+	if err := h.mgr.StreamTrack(r.Context(), token, uri, w, r); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+}
+
 
 func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request, path string, q url.Values) {
 	h.forwardWithMethod(w, r, path, q, nil, http.MethodGet)

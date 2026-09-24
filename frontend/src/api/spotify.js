@@ -96,6 +96,15 @@ export const spotifySeekTo = (ms) =>
     headers: authHeader(),
   }).then(playResult)
 
+// URL de audio completo vía nuestro backend (spclient + audio key con tu
+// token Premium). El <audio> no manda headers, así que el token va en query.
+export const trackStreamUrl = (track) => {
+  const t = getToken()
+  const uri = track.spotifyUri || (track.id ? `spotify:track:${track.id}` : null)
+  if (!t || !uri) return null
+  return `/api/v1/spotify/proxy/stream?uri=${encodeURIComponent(uri)}&access_token=${encodeURIComponent(t)}`
+}
+
 // Playlists CRUD via token — sin BDD, todo en Spotify con tu token
 export const createSpotifyPlaylist = (name, description, isPublic) =>
   fetch(`/api/v1/spotify/proxy/me/playlists`, {
