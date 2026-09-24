@@ -154,7 +154,6 @@ type SearchResult struct {
 	Album      string `json:"album"`
 	AlbumCover string `json:"albumCover"`
 	DurationMs int    `json:"duration_ms"`
-	Explicit   bool   `json:"explicit"`
 	URI        string `json:"uri"`
 }
 

@@ -191,7 +191,6 @@ func buildTrackResults(uris []string, enriched map[string]*trackMetadata) []Sear
 			r.Album = info.Album
 			r.AlbumCover = info.CoverURL
 			r.DurationMs = int(info.DurationMs)
-			r.Explicit = info.Explicit
 		}
 		results = append(results, r)
 	}
@@ -203,7 +202,6 @@ type trackMetadata struct {
 	Artist     string
 	Album      string
 	DurationMs int32
-	Explicit   bool
 	CoverURL   string
 }
 
@@ -309,7 +307,6 @@ func enrichTrackBatch(ctx context.Context, sp *spclient.Spclient, uris []string,
 				Artist:     artist,
 				Album:      album,
 				DurationMs: track.GetDuration(),
-				Explicit:   track.GetExplicit(),
 				CoverURL:   coverURL,
 			}
 		}
