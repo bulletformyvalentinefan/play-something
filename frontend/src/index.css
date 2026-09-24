@@ -80,7 +80,6 @@ button {
   max-width: 900px;
   margin: 0 auto;
   padding: 1.5rem clamp(1.25rem, 4vw, 3rem);
-  padding-left: clamp(0.5rem, 1.5vw, 1.25rem);
   display: flex;
   align-items: center;
   gap: 2rem;
@@ -268,12 +267,6 @@ button {
 
 .auth .form button[type='submit'] {
   align-self: center;
-}
-
-.auth-tabs {
-  display: flex;
-  gap: 0.75rem;
-  margin-bottom: 2rem;
 }
 
 .name {
@@ -485,20 +478,6 @@ button {
 .segment {
   display: flex;
   gap: 0.5rem;
-}
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.check input {
-  accent-color: var(--text-main);
 }
 
 /* ---------- Modal ---------- */
