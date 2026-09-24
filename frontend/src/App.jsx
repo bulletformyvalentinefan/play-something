@@ -8,6 +8,7 @@ import AuthPage from './pages/AuthPage'
 import Home from './pages/Home'
 import Library from './pages/Library'
 import PlaylistDetail from './pages/PlaylistDetail'
+import Profile from './pages/Profile'
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
                 <Route path="/" element={<Home />} />
                 <Route path="/library" element={<Library />} />
                 <Route path="/playlists/:id" element={<PlaylistDetail />} />
+                <Route path="/profile" element={<Profile />} />
               </Route>
               <Route path="*" element={<AuthPage />} />
             </Routes>

@@ -6,7 +6,7 @@ export default function PlaylistRow({ playlist, onDelete }) {
     <article className="row">
       <div className="row-meta">
         <span className="year">{playlist.esPublica ? 'pública' : 'privada'}</span>
-        <span className="tag">{playlist.trackIds.length} canciones</span>
+        <span className="tag">{playlist.total ?? playlist.trackIds.length} canciones</span>
       </div>
       <div className="row-content">
         <div className="track-main">
