@@ -312,6 +312,8 @@ func TestSpclientLogin(t *testing.T) {
 	t.Logf("stream: first bytes=%d", len(streamBody))
 	if len(streamBody) == 0 {
 		t.Errorf("empty stream body")
+	} else if ct == "audio/ogg" && (len(streamBody) < 4 || string(streamBody[0:4]) != "OggS") {
+		t.Errorf("stream ogg sin header OggS (página de metadata no salteada)")
 	}
 }
 

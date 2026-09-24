@@ -90,8 +90,10 @@ func (c *cdnReaderAt) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // decryptSeeker adapta el Decryptor (ReaderAt) a ReadSeeker para ServeContent.
+// base desplaza el origen (para saltear la página de metadata de Spotify).
 type decryptSeeker struct {
 	dec  *audio.Decryptor
+	base int64
 	size int64
 	pos  int64
 }
@@ -100,7 +102,7 @@ func (s *decryptSeeker) Read(p []byte) (int, error) {
 	if s.pos >= s.size {
 		return 0, io.EOF
 	}
-	n, err := s.dec.ReadAt(p, s.pos)
+	n, err := s.dec.ReadAt(p, s.base+s.pos)
 	s.pos += int64(n)
 	return n, err
 }
@@ -166,10 +168,55 @@ func streamTrack(ctx context.Context, sess *SpSession, uri string, w http.Respon
 		return fmt.Errorf("decryptor: %w", err)
 	}
 
+	// Los OGG de Spotify arrancan con una página de metadata propietaria
+	// (paquete 0x81) que los browsers no entienden: se saltea para servir
+	// un Ogg Vorbis limpio desde el header de identificación.
+	var base int64
+	if strings.HasPrefix(string(audioContentType(file)), "audio/ogg") {
+		if skip, serr := oggMetadataPageLen(dec); serr == nil {
+			base = skip
+		} else {
+			return fmt.Errorf("ogg metadata page: %w", serr)
+		}
+	}
+
 	w.Header().Set("Content-Type", audioContentType(file))
 	w.Header().Set("Accept-Ranges", "bytes")
-	http.ServeContent(w, r, track.GetName()+".ogg", time.Now(), &decryptSeeker{dec: dec, size: cdn.size})
+	http.ServeContent(w, r, track.GetName()+".ogg", time.Now(), &decryptSeeker{dec: dec, base: base, size: cdn.size - base})
 	return nil
+}
+
+// oggMetadataPageLen devuelve el largo de la primera página Ogg si es la de
+// metadata de Spotify (primer paquete 0x81), o 0 si el stream ya es limpio.
+func oggMetadataPageLen(dec *audio.Decryptor) (int64, error) {
+	section := io.NewSectionReader(dec, 0, 512)
+	var hdr [27]byte
+	if _, err := io.ReadFull(section, hdr[:]); err != nil {
+		return 0, err
+	}
+	if string(hdr[0:4]) != "OggS" {
+		return 0, fmt.Errorf("no es un stream Ogg")
+	}
+	nseg := int(hdr[26])
+	table := make([]byte, nseg)
+	if _, err := io.ReadFull(section, table); err != nil {
+		return 0, err
+	}
+	var bodyLen int64
+	for _, s := range table {
+		bodyLen += int64(s)
+	}
+	if nseg > 0 && table[nseg-1] == 255 {
+		return 0, fmt.Errorf("paquete de metadata continúa en la página siguiente")
+	}
+	var first [1]byte
+	if _, err := dec.ReadAt(first[:], 27+int64(nseg)); err != nil {
+		return 0, err
+	}
+	if first[0] != 0x81 {
+		return 0, nil
+	}
+	return 27 + int64(nseg) + bodyLen, nil
 }
 
 func cdnSize(client *http.Client, url string) (int64, error) {
